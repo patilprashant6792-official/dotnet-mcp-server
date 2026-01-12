@@ -49,6 +49,9 @@ public class InvalidPackageException : NuGetServiceException
     }
 }
 
+/// <summary>
+/// Push test
+/// </summary>
 public class PackageDownloadException : NuGetServiceException
 {
     public PackageDownloadException(string message, string packageId, string? version, Exception? innerException = null)
