@@ -548,37 +548,6 @@ public class CodeSearchService : ICodeSearchService
             $"{p.Type} {p.Name}" + (p.DefaultValue != null ? $" = {p.DefaultValue}" : "")));
         return $"{method.ReturnType} {method.Name}({parameters})";
     }
-
-    private static double CalculateRelevance(
-        string name,
-        string query,
-        CodeMemberType type)
-    {
-        var score = 0.0;
-
-        // Exact match
-        if (name.Equals(query, StringComparison.OrdinalIgnoreCase))
-            score += 100;
-        // Starts with query
-        else if (name.StartsWith(query, StringComparison.OrdinalIgnoreCase))
-            score += 75;
-        // Contains query
-        else if (name.Contains(query, StringComparison.OrdinalIgnoreCase))
-            score += 50;
-
-        // Boost scores based on member type relevance
-        score += type switch
-        {
-            CodeMemberType.Class => 10,
-            CodeMemberType.Method => 8,
-            CodeMemberType.Property => 6,
-            CodeMemberType.Field => 4,
-            _ => 0
-        };
-
-        return score;
-    }
-
     private List<CodeSearchResult> RankAndFilterResults(List<CodeSearchResult> results, CodeSearchRequest request)
     {
         return results

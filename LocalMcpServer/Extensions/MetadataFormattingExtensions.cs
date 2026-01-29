@@ -1,4 +1,5 @@
-﻿using NuGetExplorer.Services;
+﻿// Extensions/MetadataFormattingExtensions.cs
+using NuGetExplorer.Services;
 using System.Text;
 
 namespace NuGetExplorer.Extensions;
@@ -59,16 +60,26 @@ public static class MetadataFormattingExtensions
         sb.AppendLine($"{keyword} {type.TypeName}");
         sb.AppendLine($"{{");
 
-        // Constructors
-        foreach (var ctor in type.Constructors)
+        // Constructors (collapsed)
+        var ctorGroups = type.Constructors
+            .GroupBy(c => c.Parameters.Count)
+            .OrderBy(g => g.Key);
+
+        foreach (var group in ctorGroups)
         {
-            sb.AppendLine($"    {ctor.FormatConstructor(type.TypeName)}");
+            var representative = group.First();
+            sb.AppendLine($"    {representative.FormatConstructor(type.TypeName)}");
+
+            if (group.Count() > 1)
+            {
+                sb.AppendLine($"    // + {group.Count() - 1} overload{(group.Count() > 2 ? "s" : "")}");
+            }
         }
 
         if (type.Constructors.Count > 0 && (type.Properties.Count > 0 || type.Methods.Count > 0))
             sb.AppendLine();
 
-        // Properties
+        // Properties (no change - properties rarely have overloads)
         foreach (var prop in type.Properties.OrderBy(p => p.Name))
         {
             sb.AppendLine($"    {prop.FormatProperty()}");
@@ -77,10 +88,28 @@ public static class MetadataFormattingExtensions
         if (type.Properties.Count > 0 && type.Methods.Count > 0)
             sb.AppendLine();
 
-        // Methods
-        foreach (var method in type.Methods.OrderBy(m => m.Name))
+        // Methods (collapsed by name)
+        var methodGroups = type.Methods
+            .GroupBy(m => m.Name)
+            .OrderBy(g => g.Key);
+
+        foreach (var group in methodGroups)
         {
-            sb.AppendLine($"    {method.FormatMethod()}");
+            // Pick the most representative overload:
+            // 1. Prefer methods with 0 parameters (simplest)
+            // 2. Then by lowest parameter count
+            // 3. Then by non-generic
+            var representative = group
+                .OrderBy(m => m.Parameters.Count)
+                .ThenBy(m => m.ReturnType.Contains("<") ? 1 : 0) // Non-generic first
+                .First();
+
+            sb.AppendLine($"    {representative.FormatMethod()}");
+
+            if (group.Count() > 1)
+            {
+                sb.AppendLine($"    // + {group.Count() - 1} overload{(group.Count() > 2 ? "s" : "")}");
+            }
         }
 
         sb.AppendLine($"}}");

@@ -16,4 +16,16 @@ public interface INuGetPackageExplorer
     string? targetFramework = null,
     bool includePrerelease = false,
     CancellationToken cancellationToken = default);
+
+    // NugetServices/INugetPackageExplorer.cs - Add interface method
+
+    Task<string> GetMethodOverloads(
+        string packageId,
+        string @namespace,
+        string typeName,
+        string methodName,
+        string? version = null,
+        string? targetFramework = null,
+        bool includePrerelease = false,
+        CancellationToken cancellationToken = default);
 }

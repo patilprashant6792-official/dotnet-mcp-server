@@ -1,4 +1,5 @@
 ﻿using MCP.Core.Configuration;
+using MCP.Core.Middlewares;
 using MCP.Core.Services;
 using Microsoft.AspNetCore.RateLimiting;
 using ModelContextProtocol.Server;
@@ -122,7 +123,7 @@ builder.Logging.AddDebug();
 
 var app = builder.Build();
 
-
+app.UseMiddleware<GlobalExceptionMiddleware>();
 
 // Security headers
 app.Use(async (context, next) =>

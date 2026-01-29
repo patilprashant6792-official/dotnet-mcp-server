@@ -4,6 +4,7 @@ using MCP.Core.Services;
 using ModelContextProtocol.Server;
 using NuGetExplorer.Services;
 using System.ComponentModel;
+using System.Text;
 using System.Text.Json;
 
 namespace RisingTideAI.Trade.MCP.Host;
@@ -283,23 +284,128 @@ public class LocalTools
         }
     }
 
+    // MCPServers/LocalTools.cs
+    // REPLACE lines 284-315 with this updated method:
+
     [McpServerTool]
-    [Description("Analyzes a C# file and returns structured metadata including methods, properties, fields, attributes, constructor dependencies, and file classification. Use this to understand implementation patterns before adding new code.")]
+    [Description("Analyzes C# file(s) and returns structured metadata including methods, properties, fields, attributes, constructor dependencies, and file classification. " +
+        "BATCH MODE: Pass multiple file paths (comma-separated) to analyze them efficiently in one call (saves ~300 tokens per additional file). " +
+        "Use this to understand implementation patterns before adding new code.")]
     public async Task<string> AnalyzeCSharpFile(
-    [Description("Required: project name")]
+        [Description("Required: project name")]
     string projectName,
-    [Description("Required: relative path to C# file from project root (e.g., 'MCPServers/MCPTools.cs', 'Controllers/ToolsController.cs')")]
+        [Description("Required: relative path(s) to C# file from project root. " +
+        "Single file: 'Services/UserService.cs' OR " +
+        "Multiple files (batch): 'Services/UserService.cs,Controllers/UserController.cs,Repositories/UserRepository.cs' (comma-separated, no spaces)")]
     string relativeFilePath,
-    [Description("Optional: include private members (methods, properties, fields). Defaults to false (public members only)")]
+        [Description("Optional: include private members (methods, properties, fields). Defaults to false (public members only)")]
     bool includePrivateMembers = false)
     {
         try
         {
-            var analysis = await _projectSkeletonService.AnalyzeCSharpFileAsync(
-                projectName,
-                relativeFilePath,
-                includePrivateMembers);
-            return _markdownFormatter.FormatCSharpAnalysis(analysis);
+            // Split paths for batch mode
+            var filePaths = relativeFilePath
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToArray();
+
+            // Single file mode
+            if (filePaths.Length == 1)
+            {
+                var analysis = await _projectSkeletonService.AnalyzeCSharpFileAsync(
+                    projectName,
+                    filePaths[0],
+                    includePrivateMembers);
+                return _markdownFormatter.FormatCSharpAnalysis(analysis);
+            }
+
+            // Batch mode
+            var analyses = new List<CSharpFileAnalysis>();
+            var errors = new List<string>();
+
+            foreach (var path in filePaths)
+            {
+                try
+                {
+                    var analysis = await _projectSkeletonService.AnalyzeCSharpFileAsync(
+                        projectName,
+                        path,
+                        includePrivateMembers);
+                    analyses.Add(analysis);
+                }
+                catch (FileNotFoundException)
+                {
+                    errors.Add($"File not found: {path}");
+                }
+            }
+
+            if (analyses.Count == 0)
+            {
+                throw new ArgumentException($"No valid files found.\n\nErrors:\n{string.Join("\n", errors)}");
+            }
+
+            // Format batch results
+            var sb = new StringBuilder();
+            sb.AppendLine($"# Batch C# File Analysis: {analyses.Count} file(s)");
+            sb.AppendLine();
+            sb.AppendLine($"**Project:** {analyses[0].ProjectName}");
+            sb.AppendLine();
+
+            // Add errors if any
+            if (errors.Count > 0)
+            {
+                sb.AppendLine("⚠️ **Warnings:**");
+                foreach (var error in errors)
+                {
+                    sb.AppendLine($"- {error}");
+                }
+                sb.AppendLine();
+            }
+
+            // Table of contents
+            sb.AppendLine("## Files Index");
+            sb.AppendLine();
+            for (int i = 0; i < analyses.Count; i++)
+            {
+                var analysis = analyses[i];
+                var classCount = analysis.Classes.Count;
+                var methodCount = analysis.Classes.Sum(c => c.Methods.Count);
+                sb.AppendLine($"{i + 1}. **{analysis.FileName}** → {classCount} class{(classCount != 1 ? "es" : "")}, {methodCount} method{(methodCount != 1 ? "s" : "")}");
+            }
+            sb.AppendLine();
+            sb.AppendLine("---");
+            sb.AppendLine();
+
+            // Format each file
+            for (int i = 0; i < analyses.Count; i++)
+            {
+                var analysis = analyses[i];
+                sb.AppendLine($"## File {i + 1}: `{analysis.FileName}`");
+                sb.AppendLine();
+
+                // Use existing formatter for individual file
+                var formatted = _markdownFormatter.FormatCSharpAnalysis(analysis);
+
+                // Remove the header from individual format (avoid duplicate)
+                var lines = formatted.Split('\n');
+                var contentStart = Array.FindIndex(lines, l => l.StartsWith("**Project:**"));
+                if (contentStart > 0)
+                {
+                    sb.AppendLine(string.Join("\n", lines.Skip(contentStart)));
+                }
+                else
+                {
+                    sb.AppendLine(formatted);
+                }
+
+                if (i < analyses.Count - 1)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("---");
+                    sb.AppendLine();
+                }
+            }
+
+            return sb.ToString();
         }
         catch (KeyNotFoundException)
         {
@@ -481,6 +587,38 @@ Supports filtering by member type (Class, Interface, Method, Property, Field, Al
             return $"❌ Search failed: {ex.Message}";
         }
     }
+    [McpServerTool]
+    [Description("STEP 3 (OPTIONAL): Fetches all overloads for a specific method when you need complete signature details. " +
+    "Use this after get_namespace_summary when the collapsed view shows '+ N overloads' and you need to see all variations.")]
+    public async Task<string> GetMethodOverloads(
+    [Description("Required: NuGet package ID")]
+    string packageId,
+    [Description("Required: namespace containing the type (e.g., 'Serilog')")]
+    string @namespace,
+    [Description("Required: type name (e.g., 'ILogger', 'Log')")]
+    string typeName,
+    [Description("Required: method name (e.g., 'Write', 'Debug')")]
+    string methodName,
+    [Description("Optional: specific version")]
+    string? version = null,
+    [Description("Optional: target framework")]
+    string? targetFramework = null,
+    [Description("Optional: include prerelease")]
+    bool includePrerelease = false)
+    {
+        try
+        {
+            var metadata = await _packageExplorer.GetMethodOverloads(
+                packageId, @namespace, typeName, methodName,
+                version, targetFramework, includePrerelease);
+            return metadata;
+        }
+        catch (Exception ex)
+        {
+            throw new ArgumentException($"Failed to retrieve method overloads: {ex.Message}", ex);
+        }
+    }
+
 
 }
 
