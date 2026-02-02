@@ -6,6 +6,10 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 	</PropertyGroup>
 
+	<ItemGroup>
+	  <Compile Remove="MCPServers\LocalTools.cs" />
+	</ItemGroup>
+
 	<!-- ❌ REMOVE THE ITEMGROUP I TOLD YOU TO ADD - SDK includes wwwroot automatically -->
 	<!-- SDK already handles wwwroot files with Microsoft.NET.Sdk.Web -->
 

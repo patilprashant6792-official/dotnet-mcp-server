@@ -48,7 +48,7 @@ public class LocalTools
     #region DateTime Tools
 
     [McpServerTool]
-    [Description("Gets the current date and time in UTC, local timezone, or a specific timezone")]
+    [Description("This will provide you with users current date in UTC format. Use this date to identify right year/month for filtering/websearching for example ''")]
     public DateTimeResponse GetDateTime(
         [Description("Optional timezone ID (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo'). If not provided, returns UTC and local time")]
         string? timeZoneId = null)
