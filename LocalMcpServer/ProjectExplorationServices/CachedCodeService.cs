@@ -54,10 +54,18 @@ public class CachedCodeSearchService : ICodeSearchService
             if (ct.IsCancellationRequested) break;
 
             var (results, scanned) = await SearchProjectAsync(projectName, request, ct);
-            allResults.AddRange(results);
+
+            // Per-project cap: topK budget is per project, not global.
+            // Rank first, then cap — so each project contributes its best topK hits.
+            var projectRanked = RankAndFilter(results, request)
+                .Take(request.TopK)
+                .ToList();
+
+            allResults.AddRange(projectRanked);
             filesScanned += scanned;
         }
 
+        // Re-rank the already-per-project-capped set for final cross-project ordering.
         var ranked = RankAndFilter(allResults, request);
         sw.Stop();
 
@@ -65,8 +73,8 @@ public class CachedCodeSearchService : ICodeSearchService
         {
             Query = request.Query,
             ProjectName = request.ProjectName,
-            TotalResults = allResults.Count,
-            Results = ranked.Take(request.TopK).ToList(),
+            TotalResults = allResults.Count,  // post-per-project-cap total (intentional — reflects what's returned)
+            Results = ranked,                 // no second Take — already bounded per project above
             SearchDuration = sw.Elapsed,
             FilesScanned = filesScanned,
             ProjectsSearched = projectsToSearch.Count
@@ -162,47 +170,59 @@ public class CachedCodeSearchService : ICodeSearchService
         }
     }
 
-    // ── Search logic (mirrors CodeSearchService, extracted here to avoid coupling) ──
+    // ── Search logic ──────────────────────────────────────────────────────────
 
-    private List<CodeSearchResult> SearchInAnalysis(CSharpFileAnalysis analysis, CodeSearchRequest request)
+    private static List<CodeSearchResult> SearchInAnalysis(CSharpFileAnalysis analysis, CodeSearchRequest request)
     {
         var results = new List<CodeSearchResult>();
-        var comparison = request.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var cmp = request.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
         foreach (var cls in analysis.Classes)
         {
-            // Class/Interface match
-            if (ShouldInclude(request.MemberType, CodeMemberType.Class) ||
-                ShouldInclude(request.MemberType, CodeMemberType.Interface))
+            if (ShouldInclude(request.MemberType, CodeMemberType.Class))
             {
-                var score = FuzzyScore(cls.Name, request.Query, comparison);
-                if (score > 0)
+                var s = Score(cls.Name, request.Query, cmp);
+                if (s > 0) results.Add(new CodeSearchResult
                 {
-                    results.Add(new CodeSearchResult
+                    Name = cls.Name,
+                    MemberType = CodeMemberType.Class,
+                    FilePath = analysis.FilePath,
+                    LineNumber = cls.LineNumber,
+                    Modifiers = cls.Modifiers,
+                    RelevanceScore = s,
+                    TypeInfo = BuildClassTypeInfo(cls)
+                });
+            }
+
+            if (ShouldInclude(request.MemberType, CodeMemberType.Interface))
+            {
+                foreach (var iface in cls.Interfaces)
+                {
+                    var s = Score(iface, request.Query, cmp);
+                    if (s > 0) results.Add(new CodeSearchResult
                     {
-                        Name = cls.Name,
-                        MemberType = cls.Interfaces.Count > 0 ? CodeMemberType.Interface : CodeMemberType.Class,
+                        Name = iface,
+                        MemberType = CodeMemberType.Interface,
                         FilePath = analysis.FilePath,
                         LineNumber = cls.LineNumber,
-                        Modifiers = cls.Modifiers,
-                        RelevanceScore = score,
-                        TypeInfo = BuildClassTypeInfo(cls)
+                        ParentClass = cls.Name,
+                        TypeInfo = $"Implemented by {cls.Name}",
+                        Modifiers = new List<string>(),
+                        RelevanceScore = s
                     });
                 }
             }
 
-            if (!ShouldInclude(request.MemberType, CodeMemberType.Method) &&
-                !ShouldInclude(request.MemberType, CodeMemberType.Property) &&
-                !ShouldInclude(request.MemberType, CodeMemberType.Field) &&
-                request.MemberType != CodeMemberType.All)
-                continue;
+            if (ShouldInclude(request.MemberType, CodeMemberType.Attribute))
+                SearchAttributes(results, cls.Attributes, request.Query, cmp,
+                    analysis.FilePath, cls.LineNumber, cls.Name, null);
 
-            // Methods
             foreach (var m in cls.Methods)
             {
-                var score = FuzzyScore(m.Name, request.Query, comparison);
-                if (score > 0 && ShouldInclude(request.MemberType, CodeMemberType.Method))
-                    results.Add(new CodeSearchResult
+                if (ShouldInclude(request.MemberType, CodeMemberType.Method))
+                {
+                    var s = Score(m.Name, request.Query, cmp);
+                    if (s > 0) results.Add(new CodeSearchResult
                     {
                         Name = m.Name,
                         MemberType = CodeMemberType.Method,
@@ -211,16 +231,21 @@ public class CachedCodeSearchService : ICodeSearchService
                         ParentClass = cls.Name,
                         Signature = BuildMethodSig(m),
                         Modifiers = m.Modifiers,
-                        RelevanceScore = score
+                        RelevanceScore = s
                     });
+                }
+
+                if (ShouldInclude(request.MemberType, CodeMemberType.Attribute))
+                    SearchAttributes(results, m.Attributes, request.Query, cmp,
+                        analysis.FilePath, m.LineNumber, cls.Name, m.Name);
             }
 
-            // Properties
             foreach (var p in cls.Properties)
             {
-                var score = FuzzyScore(p.Name, request.Query, comparison);
-                if (score > 0 && ShouldInclude(request.MemberType, CodeMemberType.Property))
-                    results.Add(new CodeSearchResult
+                if (ShouldInclude(request.MemberType, CodeMemberType.Property))
+                {
+                    var s = Score(p.Name, request.Query, cmp);
+                    if (s > 0) results.Add(new CodeSearchResult
                     {
                         Name = p.Name,
                         MemberType = CodeMemberType.Property,
@@ -229,16 +254,21 @@ public class CachedCodeSearchService : ICodeSearchService
                         ParentClass = cls.Name,
                         TypeInfo = p.Type,
                         Modifiers = p.Modifiers,
-                        RelevanceScore = score
+                        RelevanceScore = s
                     });
+                }
+
+                if (ShouldInclude(request.MemberType, CodeMemberType.Attribute))
+                    SearchAttributes(results, p.Attributes, request.Query, cmp,
+                        analysis.FilePath, p.LineNumber, cls.Name, p.Name);
             }
 
-            // Fields
             foreach (var f in cls.Fields)
             {
-                var score = FuzzyScore(f.Name, request.Query, comparison);
-                if (score > 0 && ShouldInclude(request.MemberType, CodeMemberType.Field))
-                    results.Add(new CodeSearchResult
+                if (ShouldInclude(request.MemberType, CodeMemberType.Field))
+                {
+                    var s = Score(f.Name, request.Query, cmp);
+                    if (s > 0) results.Add(new CodeSearchResult
                     {
                         Name = f.Name,
                         MemberType = CodeMemberType.Field,
@@ -247,31 +277,103 @@ public class CachedCodeSearchService : ICodeSearchService
                         ParentClass = cls.Name,
                         TypeInfo = f.Type,
                         Modifiers = f.Modifiers,
-                        RelevanceScore = score
+                        RelevanceScore = s
                     });
+                }
+
+                if (ShouldInclude(request.MemberType, CodeMemberType.Attribute))
+                    SearchAttributes(results, f.Attributes, request.Query, cmp,
+                        analysis.FilePath, f.LineNumber, cls.Name, f.Name);
             }
         }
 
         return results;
     }
 
-    // ── Scoring & helpers ─────────────────────────────────────────────────────
+    // ── Scoring ───────────────────────────────────────────────────────────────
+    //
+    // Mirrors Visual Studio Ctrl+, "Navigate To" — four tiers, no fuzzy:
+    //
+    //   1000  Exact match        "Redis"  → Redis
+    //    500  Prefix match       "Red"    → RedisCache
+    //    300  CamelCase acronym  "RTC"    → RisingTideCache   (all-uppercase query only, always case-sensitive)
+    //    100  Substring match    "edi"    → Redis
+    //      0  No match
+    //
+    // The old character-subsequence fuzzy is intentionally removed — it matched
+    // "US" inside "UpdateSettings" just because U and S appear in order, producing
+    // noise across large cross-project searches.
+    // ─────────────────────────────────────────────────────────────────────────
 
-    private static double FuzzyScore(string name, string query, StringComparison cmp)
+    private static double Score(string name, string query, StringComparison cmp)
     {
-        if (name.Equals(query, cmp)) return 1.0;
-        if (name.StartsWith(query, cmp)) return 0.9;
-        if (name.Contains(query, cmp)) return 0.7;
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(query)) return 0;
+
+        if (name.Equals(query, cmp)) return 1000;
+        if (name.StartsWith(query, cmp)) return 500;
+        if (IsCamelCaseAcronym(name, query)) return 300;
+        if (name.Contains(query, cmp)) return 100;
+
         return 0;
+    }
+
+    /// <summary>
+    /// Only activates when query is all-uppercase (user is in acronym mode).
+    /// Extracts uppercase initials from PascalCase/camelCase name and checks prefix.
+    /// "RTC" → "RisingTideCache" ✓    "rtc" → skipped (not acronym mode)
+    /// </summary>
+    private static bool IsCamelCaseAcronym(string name, string query)
+    {
+        if (query != query.ToUpperInvariant() || query.Length < 2) return false;
+        var initials = string.Concat(name.Where(char.IsUpper));
+        return initials.StartsWith(query, StringComparison.Ordinal);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static void SearchAttributes(
+        List<CodeSearchResult> results,
+        List<AttributeInfo>? attributes,
+        string query, StringComparison cmp,
+        string filePath, int lineNumber,
+        string parentClass, string? parentMember)
+    {
+        if (attributes == null || attributes.Count == 0) return;
+        foreach (var attr in attributes)
+        {
+            var attrName = ExtractAttributeName(attr.Name);
+            var s = Score(attrName, query, cmp);
+            if (s > 0) results.Add(new CodeSearchResult
+            {
+                Name = attrName,
+                MemberType = CodeMemberType.Attribute,
+                FilePath = filePath,
+                LineNumber = lineNumber,
+                ParentClass = parentClass,
+                ParentMember = parentMember,
+                Signature = parentMember != null ? $"On {parentMember}" : "Class-level",
+                Modifiers = new List<string>(),
+                RelevanceScore = s
+            });
+        }
+    }
+
+    private static string ExtractAttributeName(string attributeText)
+    {
+        var name = attributeText.TrimStart('[').Split('(')[0].Trim().TrimEnd(']');
+        return name.EndsWith("Attribute") ? name[..^"Attribute".Length] : name;
     }
 
     private static bool ShouldInclude(CodeMemberType filter, CodeMemberType type) =>
         filter == CodeMemberType.All || filter == type;
 
-    private static string BuildClassTypeInfo(ClassInfo c) =>
-        c.BaseClass != null
-            ? $"extends {c.BaseClass}" + (c.Interfaces.Count > 0 ? $", implements {string.Join(", ", c.Interfaces)}" : "")
-            : c.Interfaces.Count > 0 ? $"implements {string.Join(", ", c.Interfaces)}" : string.Empty;
+    private static string BuildClassTypeInfo(ClassInfo c)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrEmpty(c.BaseClass)) parts.Add($"extends {c.BaseClass}");
+        if (c.Interfaces.Count > 0) parts.Add($"implements {string.Join(", ", c.Interfaces)}");
+        return string.Join(", ", parts);
+    }
 
     private static string BuildMethodSig(MethodInfo m)
     {
@@ -280,5 +382,5 @@ public class CachedCodeSearchService : ICodeSearchService
     }
 
     private static List<CodeSearchResult> RankAndFilter(List<CodeSearchResult> results, CodeSearchRequest req) =>
-        results.OrderByDescending(r => r.RelevanceScore).ToList();
+        results.OrderByDescending(r => r.RelevanceScore).ThenBy(r => r.Name).ToList();
 }

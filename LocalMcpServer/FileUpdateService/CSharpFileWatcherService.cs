@@ -180,11 +180,14 @@ public class CSharpFileWatcherService : BackgroundService, IFileWatcherRegistry
 
     // ── Cache operations ──────────────────────────────────────────────────────
 
+    // ── Replace only these two methods inside CSharpFileWatcherService ─────
+
+    // ── Replace only these two methods inside CSharpFileWatcherService ─────
+
     private async Task ReanalyseFileAsync(string projectName, string relativePath, CancellationToken ct)
     {
         using var scope = _sp.CreateScope();
-        // Use concrete type directly — bypasses CachedProjectSkeletonService decorator
-        // so the watcher always writes fresh data to cache, never reads its own output
+        // Concrete type — bypasses decorator so watcher always writes fresh data, never reads its own output
         var skeleton = scope.ServiceProvider.GetRequiredService<ProjectSkeletonService>();
         var cache = scope.ServiceProvider.GetRequiredService<IAnalysisCacheService>();
 
@@ -193,14 +196,26 @@ public class CSharpFileWatcherService : BackgroundService, IFileWatcherRegistry
             var analysis = await skeleton.AnalyzeCSharpFileAsync(
                 projectName, relativePath, includePrivateMembers: true, ct);
 
-            await cache.SetAsync(projectName, relativePath, analysis);
-            await cache.AddToIndexAsync(projectName, relativePath);
+            var methodNames = analysis.Classes
+                .SelectMany(c => c.Methods.Select(m => m.Name))
+                .Distinct()
+                .ToArray();
+
+            var setAnalysisTask = cache.SetAsync(projectName, relativePath, analysis);
+            var setMethodsTask = methodNames.Length > 0
+                ? IndexMethodsAsync(projectName, relativePath, methodNames, skeleton, cache, ct)
+                : Task.CompletedTask;
+
+            await Task.WhenAll(
+                setAnalysisTask,
+                setMethodsTask,
+                cache.AddToIndexAsync(projectName, relativePath));
 
             _logger.LogInformation("Re-indexed {Project}:{Path}", projectName, relativePath);
         }
         catch (FileNotFoundException)
         {
-            // File was deleted between the event and now — treat as delete
+            // File deleted between event and now — treat as delete
             await DeleteFileAsync(projectName, relativePath);
         }
         catch (Exception ex)
@@ -214,10 +229,34 @@ public class CSharpFileWatcherService : BackgroundService, IFileWatcherRegistry
         using var scope = _sp.CreateScope();
         var cache = scope.ServiceProvider.GetRequiredService<IAnalysisCacheService>();
 
-        await cache.DeleteAsync(projectName, relativePath);
-        await cache.RemoveFromIndexAsync(projectName, relativePath);
+        // DeleteAsync now removes both analysis + methods keys in one call
+        await Task.WhenAll(
+            cache.DeleteAsync(projectName, relativePath),
+            cache.RemoveFromIndexAsync(projectName, relativePath));
 
         _logger.LogInformation("Removed from cache {Project}:{Path}", projectName, relativePath);
+    }
+
+    /// <summary>
+    /// Shared helper — same key strategy as the background indexer.
+    /// </summary>
+    private static async Task IndexMethodsAsync(
+        string projectName,
+        string relativePath,
+        string[] methodNames,
+        ProjectSkeletonService skeleton,
+        IAnalysisCacheService cache,
+        CancellationToken ct)
+    {
+        var impls = await skeleton.FetchMethodImplementationsBatchAsync(
+            projectName, relativePath, methodNames, className: null, ct);
+
+        var counts = impls.GroupBy(m => m.MethodName).ToDictionary(g => g.Key, g => g.Count());
+        var dict = impls.ToDictionary(
+            m => counts[m.MethodName] > 1 ? $"{m.ClassName}::{m.MethodName}" : m.MethodName,
+            m => m);
+
+        await cache.SetMethodsAsync(projectName, relativePath, dict);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

@@ -116,6 +116,8 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
     }
 });
 
+// Add this alongside the other singleton registrations (e.g. after IAnalysisCacheService):
+builder.Services.AddSingleton<IAnalysisTriggerService, AnalysisTriggerService>();
 builder.Services.AddHostedService<CSharpAnalysisBackgroundService>();
 builder.Services.AddSingleton<IFileWatcherRegistry, CSharpFileWatcherService>();
 builder.Services.AddHostedService(sp =>

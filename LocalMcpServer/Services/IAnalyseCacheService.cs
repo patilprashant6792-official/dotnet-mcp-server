@@ -1,4 +1,5 @@
-﻿using MCP.Core.Services;
+﻿using MCP.Core.Configuration;
+using MCP.Core.Services;
 
 namespace MCP.Core.Services;
 
@@ -10,7 +11,7 @@ public interface IAnalysisCacheService
     /// <summary>Stores a file analysis with the configured TTL.</summary>
     Task SetAsync(string projectName, string relativePath, CSharpFileAnalysis analysis);
 
-    /// <summary>Removes a single file's analysis (e.g. on deletion).</summary>
+    /// <summary>Removes a single file's analysis and method cache (e.g. on deletion).</summary>
     Task DeleteAsync(string projectName, string relativePath);
 
     /// <summary>Returns all relative paths currently indexed for a project.</summary>
@@ -30,4 +31,21 @@ public interface IAnalysisCacheService
     /// Call this when a project is deleted from config.
     /// </summary>
     Task PurgeProjectAsync(string projectName);
+
+    // ── Method-body cache ───────────────────────────────────────────────────
+
+    /// <summary>Returns true if a method cache entry exists for the file. Cheaper than GetMethodsAsync — no deserialization.</summary>
+    Task<bool> MethodsExistAsync(string projectName, string relativePath);
+
+    /// <summary>
+    /// Retrieves all cached method implementations for a file.
+    /// Key is method name. Returns null on miss.
+    /// </summary>
+    Task<Dictionary<string, MethodImplementationInfo>?> GetMethodsAsync(string projectName, string relativePath);
+
+    /// <summary>
+    /// Stores all method implementations for a file with the configured TTL.
+    /// </summary>
+    Task SetMethodsAsync(string projectName, string relativePath,
+        Dictionary<string, MethodImplementationInfo> methods);
 }

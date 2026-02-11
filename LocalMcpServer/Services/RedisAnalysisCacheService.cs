@@ -11,24 +11,12 @@ public class RedisAnalysisCacheService : IAnalysisCacheService
     private readonly IDatabase _db;
     private readonly TimeSpan _ttl;
     private readonly ILogger<RedisAnalysisCacheService> _logger;
-
     private static readonly JsonSerializerOptions _json = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
+        WriteIndented = false,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
-
-    // Key patterns
-    // mcp:analysis:{project}:{normalizedPath}  → CSharpFileAnalysis JSON
-    // mcp:analysis:index:{project}             → JSON array of relative paths
-    private static string AnalysisKey(string project, string path) =>
-        $"mcp:analysis:{Normalize(project)}:{Normalize(path)}";
-
-    private static string IndexKey(string project) =>
-        $"mcp:analysis:index:{Normalize(project)}";
-
-    private static string Normalize(string s) =>
-        s.Trim().ToLowerInvariant().Replace('\\', '/').TrimStart('/');
 
     public RedisAnalysisCacheService(
         IConnectionMultiplexer redis,
@@ -36,9 +24,25 @@ public class RedisAnalysisCacheService : IAnalysisCacheService
         ILogger<RedisAnalysisCacheService> logger)
     {
         _db = redis.GetDatabase();
-        _ttl = TimeSpan.FromHours(options.Value.TtlHours);
+        _ttl =new TimeSpan( options.Value.TtlHours,0,0);
         _logger = logger;
     }
+
+    // ── Key helpers ─────────────────────────────────────────────────────────
+
+    private static string AnalysisKey(string project, string path)
+        => $"analysis:{Normalize(project)}:{Normalize(path)}";
+
+    private static string MethodsKey(string project, string path)
+        => $"methods:{Normalize(project)}:{Normalize(path)}";
+
+    private static string IndexKey(string project)
+        => $"index:{Normalize(project)}";
+
+    private static string Normalize(string s)
+        => s.ToLowerInvariant().Replace('\\', '/');
+
+    // ── File analysis ────────────────────────────────────────────────────────
 
     public async Task<CSharpFileAnalysis?> GetAsync(string projectName, string relativePath)
     {
@@ -72,7 +76,10 @@ public class RedisAnalysisCacheService : IAnalysisCacheService
     {
         try
         {
-            await _db.KeyDeleteAsync(AnalysisKey(projectName, relativePath));
+            await _db.KeyDeleteAsync([
+                AnalysisKey(projectName, relativePath),
+                MethodsKey(projectName, relativePath)
+            ]);
         }
         catch (Exception ex)
         {
@@ -80,17 +87,64 @@ public class RedisAnalysisCacheService : IAnalysisCacheService
         }
     }
 
+    // ── Method-body cache ────────────────────────────────────────────────────
+
+    public async Task<bool> MethodsExistAsync(string projectName, string relativePath)
+    {
+        try
+        {
+            return await _db.KeyExistsAsync(MethodsKey(projectName, relativePath));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Methods EXISTS check failed for {Project}:{Path}", projectName, relativePath);
+            return false;
+        }
+    }
+
+    public async Task<Dictionary<string, MethodImplementationInfo>?> GetMethodsAsync(
+        string projectName, string relativePath)
+    {
+        try
+        {
+            var val = await _db.StringGetAsync(MethodsKey(projectName, relativePath));
+            if (val.IsNullOrEmpty) return null;
+            return JsonSerializer.Deserialize<Dictionary<string, MethodImplementationInfo>>(
+                val.ToString(), _json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Methods cache GET failed for {Project}:{Path}", projectName, relativePath);
+            return null;
+        }
+    }
+
+    public async Task SetMethodsAsync(string projectName, string relativePath,
+        Dictionary<string, MethodImplementationInfo> methods)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(methods, _json);
+            await _db.StringSetAsync(MethodsKey(projectName, relativePath), json, _ttl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Methods cache SET failed for {Project}:{Path}", projectName, relativePath);
+        }
+    }
+
+    // ── Index management ─────────────────────────────────────────────────────
+
     public async Task<IReadOnlyList<string>> GetIndexAsync(string projectName)
     {
         try
         {
-            var val = await _db.StringGetAsync(IndexKey(projectName));
-            if (val.IsNullOrEmpty) return [];
-            return JsonSerializer.Deserialize<List<string>>(val.ToString(), _json) ?? [];
+            var members = await _db.SetMembersAsync(IndexKey(projectName));
+            return members.Select(m => m.ToString()).ToList();
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Cache GET index failed for {Project}", projectName);
+            _logger.LogWarning(ex, "Cache INDEX GET failed for {Project}", projectName);
             return [];
         }
     }
@@ -99,13 +153,19 @@ public class RedisAnalysisCacheService : IAnalysisCacheService
     {
         try
         {
-            var json = JsonSerializer.Serialize(relativePaths.ToList(), _json);
-            // Index has no TTL — it's the authoritative list; individual entries expire on their own
-            await _db.StringSetAsync(IndexKey(projectName), json);
+            var key = IndexKey(projectName);
+            var members = relativePaths.Select(p => (RedisValue)p).ToArray();
+
+            var tx = _db.CreateTransaction();
+            _ = tx.KeyDeleteAsync(key);
+            if (members.Length > 0)
+                _ = tx.SetAddAsync(key, members);
+            _ = tx.KeyExpireAsync(key, _ttl);
+            await tx.ExecuteAsync();
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Cache SET index failed for {Project}", projectName);
+            _logger.LogWarning(ex, "Cache INDEX SET failed for {Project}", projectName);
         }
     }
 
@@ -113,14 +173,11 @@ public class RedisAnalysisCacheService : IAnalysisCacheService
     {
         try
         {
-            var index = (await GetIndexAsync(projectName)).ToList();
-            var normalized = Normalize(relativePath);
-            if (index.Remove(normalized))
-                await SetIndexAsync(projectName, index);
+            await _db.SetRemoveAsync(IndexKey(projectName), relativePath);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Cache REMOVE from index failed for {Project}:{Path}", projectName, relativePath);
+            _logger.LogWarning(ex, "Cache INDEX REMOVE failed for {Project}:{Path}", projectName, relativePath);
         }
     }
 
@@ -128,17 +185,12 @@ public class RedisAnalysisCacheService : IAnalysisCacheService
     {
         try
         {
-            var index = (await GetIndexAsync(projectName)).ToList();
-            var normalized = Normalize(relativePath);
-            if (!index.Contains(normalized))
-            {
-                index.Add(normalized);
-                await SetIndexAsync(projectName, index);
-            }
+            await _db.SetAddAsync(IndexKey(projectName), relativePath);
+            await _db.KeyExpireAsync(IndexKey(projectName), _ttl);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Cache ADD to index failed for {Project}:{Path}", projectName, relativePath);
+            _logger.LogWarning(ex, "Cache INDEX ADD failed for {Project}:{Path}", projectName, relativePath);
         }
     }
 
@@ -146,11 +198,15 @@ public class RedisAnalysisCacheService : IAnalysisCacheService
     {
         try
         {
-            // Use the index to find every analysis key — avoids a KEYS scan on Redis
             var index = await GetIndexAsync(projectName);
 
+            // Delete analysis keys, method keys, and the index key in one batch
             var keys = index
-                .Select(p => (RedisKey)AnalysisKey(projectName, p))
+                .SelectMany(p => new RedisKey[]
+                {
+                    AnalysisKey(projectName, p),
+                    MethodsKey(projectName, p)
+                })
                 .Append((RedisKey)IndexKey(projectName))
                 .ToArray();
 

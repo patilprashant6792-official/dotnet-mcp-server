@@ -4,62 +4,136 @@ using Microsoft.Extensions.Options;
 
 namespace MCP.Core.BackgroundServices;
 
-/// <summary>
-/// Continuously indexes all .cs files across all configured projects into Redis.
-/// Runs a full pass on startup, then repeats every RefreshIntervalMinutes.
-/// This ensures SearchCodeGlobally reads pre-analysed data instead of doing
-/// live Roslyn parses per query.
-/// </summary>
 public class CSharpAnalysisBackgroundService : BackgroundService
 {
     private readonly IServiceProvider _sp;
     private readonly AnalysisCacheConfig _config;
+    private readonly IAnalysisTriggerService _trigger;
     private readonly ILogger<CSharpAnalysisBackgroundService> _logger;
 
-    private static readonly HashSet<string> ExcludedDirs = new(StringComparer.OrdinalIgnoreCase)
-        { "bin", "obj", ".vs", ".git", "node_modules", "packages" };
+    private static readonly HashSet<string> ExcludedDirs =
+        new(StringComparer.OrdinalIgnoreCase) { "bin", "obj", ".git", ".vs", "node_modules" };
 
     public CSharpAnalysisBackgroundService(
         IServiceProvider sp,
         IOptions<AnalysisCacheConfig> config,
+        IAnalysisTriggerService trigger,
         ILogger<CSharpAnalysisBackgroundService> logger)
     {
         _sp = sp;
         _config = config.Value;
+        _trigger = trigger;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        // Yield once so the host can finish startup before the CPU-heavy work begins
-        await Task.Yield();
+        _logger.LogInformation("Background indexer starting");
 
-        _logger.LogInformation("CSharpAnalysisBackgroundService started. Refresh interval: {Minutes} min",
-            _config.RefreshIntervalMinutes);
+        // Drain on-demand triggers concurrently with the scheduled full pass.
+        // A separate loop handles triggers so the scheduled timer is never blocked.
+        var triggerLoop = Task.Run(() => RunTriggerLoopAsync(ct), ct);
+        var scheduledLoop = Task.Run(() => RunScheduledLoopAsync(ct), ct);
 
+        await Task.WhenAll(triggerLoop, scheduledLoop);
+
+        _logger.LogInformation("Background indexer stopped");
+    }
+
+    // ── Scheduled full-pass loop ─────────────────────────────────────────────
+
+    private async Task RunScheduledLoopAsync(CancellationToken ct)
+    {
         while (!ct.IsCancellationRequested)
         {
-            await RunFullIndexPassAsync(ct);
+            try
+            {
+                await RunFullIndexPassAsync(ct);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Scheduled index pass failed");
+            }
 
-            if (ct.IsCancellationRequested) break;
-
-            _logger.LogInformation("Analysis index pass complete. Next pass in {Minutes} min",
-                _config.RefreshIntervalMinutes);
-
-            await Task.Delay(TimeSpan.FromMinutes(_config.RefreshIntervalMinutes), ct)
-                      .ContinueWith(_ => { }, CancellationToken.None); // swallow TaskCanceledException on shutdown
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(_config.RefreshIntervalMinutes), ct);
+            }
+            catch (OperationCanceledException) { break; }
         }
-
-        _logger.LogInformation("CSharpAnalysisBackgroundService stopping.");
     }
+
+    // ── On-demand trigger loop ───────────────────────────────────────────────
+
+    private async Task RunTriggerLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            var projectName = await _trigger.WaitForTriggerAsync(ct);
+            if (projectName is null) break; // cancelled
+
+            // Drain any duplicate triggers queued for the same project
+            // (e.g., rapid add + update before indexing starts)
+            var batch = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { projectName };
+            while (TryDrainNext(out var next))
+                batch.Add(next!);
+
+            _logger.LogInformation(
+                "On-demand indexing triggered for {Count} project(s): {Names}",
+                batch.Count, string.Join(", ", batch));
+
+            using var scope = _sp.CreateScope();
+            var skeletonService = scope.ServiceProvider.GetRequiredService<ProjectSkeletonService>();
+            var cache = scope.ServiceProvider.GetRequiredService<IAnalysisCacheService>();
+            var configService = scope.ServiceProvider.GetRequiredService<IProjectConfigService>();
+
+            // Only index projects that are still configured and enabled
+            var allProjects = configService.LoadProjects().Projects
+                .Where(p => p.Enabled && batch.Contains(p.Name))
+                .ToList();
+
+            if (allProjects.Count == 0)
+            {
+                _logger.LogWarning("On-demand trigger: none of the requested projects are enabled/found");
+                continue;
+            }
+
+            var sem = new SemaphoreSlim(_config.IndexingConcurrency);
+            var tasks = allProjects.Select(p =>
+                IndexProjectAsync(p.Name, p.Path, skeletonService, cache, sem, ct));
+
+            try
+            {
+                await Task.WhenAll(tasks);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "On-demand index pass failed");
+            }
+        }
+    }
+
+    /// <summary>Non-blocking drain of any already-queued trigger names.</summary>
+    private bool TryDrainNext([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? name)
+    {
+        // IAnalysisTriggerService doesn't expose TryRead directly, but we can
+        // check via a zero-timeout task — simplest is to cast to the concrete type.
+        // To keep the interface clean we expose a sync TryRead on the implementation.
+        if (_trigger is AnalysisTriggerService concrete)
+            return concrete.TryRead(out name);
+
+        name = null;
+        return false;
+    }
+
+    // ── Full pass ────────────────────────────────────────────────────────────
 
     private async Task RunFullIndexPassAsync(CancellationToken ct)
     {
-        // Resolve scoped/singleton services fresh each pass
         using var scope = _sp.CreateScope();
         var configService = scope.ServiceProvider.GetRequiredService<IProjectConfigService>();
-        // Use concrete type directly — bypasses CachedProjectSkeletonService decorator
-        // so the indexer always writes fresh data to cache, never reads its own output
         var skeletonService = scope.ServiceProvider.GetRequiredService<ProjectSkeletonService>();
         var cache = scope.ServiceProvider.GetRequiredService<IAnalysisCacheService>();
 
@@ -69,25 +143,25 @@ public class CSharpAnalysisBackgroundService : BackgroundService
 
         if (projects.Count == 0)
         {
-            _logger.LogDebug("No enabled projects found, skipping index pass.");
+            _logger.LogDebug("No enabled projects found, skipping index pass");
             return;
         }
 
-        _logger.LogInformation("Starting index pass for {Count} project(s)", projects.Count);
+        _logger.LogInformation("Starting scheduled index pass for {Count} project(s)", projects.Count);
 
         var sem = new SemaphoreSlim(_config.IndexingConcurrency);
+        var tasks = projects.Select(p =>
+            IndexProjectAsync(p.Name, p.Path, skeletonService, cache, sem, ct));
 
-        foreach (var project in projects)
-        {
-            if (ct.IsCancellationRequested) break;
-            await IndexProjectAsync(project.Name, project.Path, skeletonService, cache, sem, ct);
-        }
+        await Task.WhenAll(tasks);
     }
+
+    // ── Per-project indexing (unchanged logic) ───────────────────────────────
 
     private async Task IndexProjectAsync(
         string projectName,
         string projectPath,
-        IProjectSkeletonService skeletonService,
+        ProjectSkeletonService skeletonService,
         IAnalysisCacheService cache,
         SemaphoreSlim sem,
         CancellationToken ct)
@@ -116,14 +190,17 @@ public class CSharpAnalysisBackgroundService : BackgroundService
                 var analysis = await skeletonService.AnalyzeCSharpFileAsync(
                     projectName, rel, includePrivateMembers: true, ct);
 
-                await cache.SetAsync(projectName, rel, analysis);
+                var methodsAlreadyCached = await cache.MethodsExistAsync(projectName, rel);
 
+                var setAnalysisTask = cache.SetAsync(projectName, rel, analysis);
+                var setMethodsTask = methodsAlreadyCached
+                    ? Task.CompletedTask
+                    : IndexMethodsAsync(projectName, rel, filePath, analysis, cache, ct);
+
+                await Task.WhenAll(setAnalysisTask, setMethodsTask);
                 lock (indexed) indexed.Add(rel);
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 Interlocked.Increment(ref failed);
@@ -136,8 +213,6 @@ public class CSharpAnalysisBackgroundService : BackgroundService
         });
 
         await Task.WhenAll(tasks);
-
-        // Atomically replace the index for this project
         await cache.SetIndexAsync(projectName, indexed);
 
         _logger.LogInformation(
@@ -145,9 +220,64 @@ public class CSharpAnalysisBackgroundService : BackgroundService
             projectName, indexed.Count, failed, csFiles.Count);
     }
 
-    private static bool IsExcluded(string filePath)
+    private static async Task IndexMethodsAsync(
+        string projectName,
+        string relativePath,
+        string fullPath,
+        CSharpFileAnalysis analysis,
+        IAnalysisCacheService cache,
+        CancellationToken ct)
     {
-        var parts = filePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return parts.Any(p => ExcludedDirs.Contains(p));
+        var lines = await File.ReadAllLinesAsync(fullPath, ct);
+        var dict = new Dictionary<string, MethodImplementationInfo>();
+
+        foreach (var classInfo in analysis.Classes)
+        {
+            foreach (var method in classInfo.Methods)
+            {
+                var startIdx = Math.Max(0, method.LineNumberStart - 1);
+                var endIdx = Math.Min(lines.Length - 1, method.LineNumberEnd - 1);
+                var fullMethodCode = string.Join(Environment.NewLine, lines[startIdx..(endIdx + 1)]);
+
+                var bodyStartOffset = Array.FindIndex(
+                    lines, startIdx, endIdx - startIdx + 1,
+                    l => l.TrimEnd().EndsWith('{'));
+
+                var methodBody = bodyStartOffset >= 0
+                    ? string.Join(Environment.NewLine, lines[(bodyStartOffset + 1)..(endIdx + 1)])
+                    : string.Empty;
+
+                var info = new MethodImplementationInfo
+                {
+                    ProjectName = projectName,
+                    FilePath = relativePath,
+                    ClassName = classInfo.Name,
+                    Namespace = analysis.Namespace,
+                    MethodName = method.Name,
+                    FullSignature = method.Name,
+                    ReturnType = method.ReturnType,
+                    Modifiers = method.Modifiers,
+                    Parameters = method.Parameters,
+                    Attributes = method.Attributes,
+                    XmlDocumentation = method.XmlDocumentation,
+                    MethodBody = methodBody,
+                    FullMethodCode = fullMethodCode,
+                    LineNumber = method.LineNumberStart,
+                    IsAsync = method.Modifiers.Contains("async"),
+                    IsStatic = method.Modifiers.Contains("static"),
+                    IsVirtual = method.Modifiers.Contains("virtual"),
+                    IsOverride = method.Modifiers.Contains("override"),
+                    IsAbstract = method.Modifiers.Contains("abstract")
+                };
+
+                var key = $"{classInfo.Name}::{method.Name}::{method.LineNumberStart}";
+                dict[key] = info;
+            }
+        }
+
+        await cache.SetMethodsAsync(projectName, relativePath, dict);
     }
+
+    private static bool IsExcluded(string filePath)
+        => ExcludedDirs.Any(d => filePath.Split(Path.DirectorySeparatorChar).Contains(d));
 }

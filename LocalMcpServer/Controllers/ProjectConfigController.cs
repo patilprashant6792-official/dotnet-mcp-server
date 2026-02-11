@@ -9,20 +9,26 @@ namespace MCP.Host.Controllers;
 [Route("api/projects")]
 public class ProjectConfigController : ControllerBase
 {
+
+    // ── Constructor: add IAnalysisTriggerService ──────────────────────────────
+
     private readonly IProjectConfigService _configService;
     private readonly IAnalysisCacheService _cache;
     private readonly IFileWatcherRegistry _watcher;
+    private readonly IAnalysisTriggerService _trigger;          // <-- NEW
     private readonly ILogger<ProjectConfigController> _logger;
 
     public ProjectConfigController(
         IProjectConfigService configService,
         IAnalysisCacheService cache,
         IFileWatcherRegistry watcher,
+        IAnalysisTriggerService trigger,                        // <-- NEW
         ILogger<ProjectConfigController> logger)
     {
         _configService = configService;
         _cache = cache;
         _watcher = watcher;
+        _trigger = trigger;                                     // <-- NEW
         _logger = logger;
     }
 
@@ -81,7 +87,9 @@ public class ProjectConfigController : ControllerBase
 
             // Start watching immediately — background indexer will pick it up on next pass,
             // but the watcher must be live now to catch any saves in the meantime
+
             _watcher.RegisterProject(project.Name, project.Path);
+            _trigger.TriggerProjectIndexing(project.Name);             // <-- NEW
 
             _logger.LogInformation("Project added: {ProjectName} at {ProjectPath}", project.Name, project.Path);
             return Ok(result);
@@ -128,6 +136,8 @@ public class ProjectConfigController : ControllerBase
                     // Stop watcher on old registration, start on new
                     _watcher.UnregisterProject(existing.Name);
                     _watcher.RegisterProject(project.Name, project.Path);
+
+                    _trigger.TriggerProjectIndexing(project.Name);
 
                     _logger.LogInformation(
                         "Project '{OldName}' → '{NewName}': cache purged, watcher re-registered",
