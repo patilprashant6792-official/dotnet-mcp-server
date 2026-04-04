@@ -205,6 +205,36 @@ public class GlobalExceptionMiddleware
                         ? new Dictionary<string, object> { ["stackTrace"] = ex.StackTrace ?? "" }
                         : null
                 }),
+            // Add these two cases BEFORE the final catch-all `_ =>` arm
+            // in the MapExceptionToResponse switch expression:
+
+            FileNotFoundException ex => (
+                HttpStatusCode.NotFound,
+                new ErrorResponse
+                {
+                    RequestId = requestId,
+                    Error = "File Not Found",
+                    Message = ex.Message,
+                    Details = _environment.IsDevelopment()
+                        ? new Dictionary<string, object> { ["stackTrace"] = ex.StackTrace ?? "" }
+                        : null
+                }),
+
+            IOException ex => (
+                HttpStatusCode.InternalServerError,
+                new ErrorResponse
+                {
+                    RequestId = requestId,
+                    Error = "IO Error",
+                    Message = ex.Message,
+                    Details = _environment.IsDevelopment()
+                        ? new Dictionary<string, object>
+                        {
+                            ["ioErrorType"] = ex.GetType().Name,
+                            ["stackTrace"] = ex.StackTrace ?? ""
+                        }
+                        : null
+                }),
 
             // Catch-all for unexpected exceptions
             _ => (

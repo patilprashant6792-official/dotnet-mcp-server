@@ -10,6 +10,7 @@ using NuGetExplorer.Services;
 using StackExchange.Redis;
 using System;
 using System.Threading.RateLimiting;
+using MCP.Core.FileModificationService;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -52,6 +53,7 @@ builder.Services.AddSingleton<ICodeSearchService, CachedCodeSearchService>();
 builder.Services.AddSingleton<ICodeSearchFormatterService, CodeSearchFormatterService>();
 // Project configuration service (singleton for file access)
 builder.Services.AddSingleton<IProjectConfigService, RedisProjectConfigService>();
+builder.Services.AddSingleton<IFileModificationService, FileModificationService>(); ;
 builder.Services.AddSingleton<INuGetPackageLoader, NuGetPackageLoader>();
 builder.Services.AddSingleton<INuGetPackageExplorer>(sp =>
 {
@@ -147,7 +149,7 @@ app.Use(async (context, next) =>
     context.Response.Headers["X-Frame-Options"] = "DENY";
     context.Response.Headers["X-XSS-Protection"] = "1; mode=block";
     context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
-        await next();
+    await next();
 });
 
 

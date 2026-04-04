@@ -21,24 +21,47 @@ public class CachedProjectSkeletonService : IProjectSkeletonService
     }
 
     public async Task<CSharpFileAnalysis> AnalyzeCSharpFileAsync(
-        string projectName,
-        string relativeFilePath,
-        bool includePrivateMembers = false,
-        CancellationToken cancellationToken = default)
+    string projectName,
+    string relativeFilePath,
+    bool includePrivateMembers = false,
+    CancellationToken cancellationToken = default)
     {
-        var cached = await _cache.GetAsync(projectName, relativeFilePath);
+        var cacheKey = includePrivateMembers ? $"{relativeFilePath}::private" : relativeFilePath;
+
+        var cached = await _cache.GetAsync(projectName, cacheKey);
         if (cached != null)
         {
-            _logger.LogDebug("Cache HIT analysis: {Project}:{Path}", projectName, relativeFilePath);
+            _logger.LogDebug("Cache HIT analysis: {Project}:{Path} private={Flag}",
+                projectName, relativeFilePath, includePrivateMembers);
             return cached;
         }
 
-        _logger.LogDebug("Cache MISS analysis: {Project}:{Path} — live parse", projectName, relativeFilePath);
+        _logger.LogDebug("Cache MISS analysis: {Project}:{Path} private={Flag} — live parse",
+            projectName, relativeFilePath, includePrivateMembers);
 
         var analysis = await _inner.AnalyzeCSharpFileAsync(
-            projectName, relativeFilePath, includePrivateMembers: true, cancellationToken);
+            projectName, relativeFilePath, includePrivateMembers, cancellationToken);
 
-        _ = BackfillAsync(projectName, relativeFilePath, analysis, cancellationToken: CancellationToken.None);
+        if (includePrivateMembers)
+        {
+            // Write scoped key directly — don't pass to BackfillAsync which would poison the index
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _cache.SetAsync(projectName, cacheKey, analysis);
+                    _logger.LogDebug("Cache backfilled private analysis: {Project}:{Path}", projectName, relativeFilePath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Cache backfill (private) failed: {Project}:{Path}", projectName, relativeFilePath);
+                }
+            }, CancellationToken.None);
+        }
+        else
+        {
+            _ = BackfillAsync(projectName, relativeFilePath, analysis, cancellationToken: CancellationToken.None);
+        }
 
         return analysis;
     }
