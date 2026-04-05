@@ -22,11 +22,11 @@ Most AI coding tools work by dumping entire files into an LLM's context window. 
 ## How it works
 
 ```
-Claude.ai  ──SSE──►  dotnet-mcp-server  ──Roslyn──►  Your C# source
-                           │
-                           ├──Redis──►  Analysis cache + project index
-                           │
-                           └──NuGet──►  Installed package reflection
+Claude.ai  ──HTTPS──►  ngrok tunnel  ──SSE──►  dotnet-mcp-server  ──Roslyn──►  Your C# source
+                                                       │
+                                                       ├──Redis──►  Analysis cache + project index
+                                                       │
+                                                       └──NuGet──►  Installed package reflection
 ```
 
 1. Claude calls an MCP tool (e.g. `analyze_c_sharp_file`).
@@ -123,6 +123,7 @@ Register all your microservices once. Every tool accepts a `projectName` paramet
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Redis](https://redis.io/docs/getting-started/) (local or Docker)
+- [ngrok](https://ngrok.com/download) (to expose the local server to Claude.ai)
 - A [Claude.ai](https://claude.ai) account with MCP connector support
 - Windows, macOS, or Linux
 
@@ -185,17 +186,51 @@ Project configuration is persisted in Redis — you only need to register once.
 ```bash
 dotnet run
 # Server starts on http://localhost:5000
-# SSE endpoint: http://localhost:5000/sse
 ```
 
-### 6. Connect Claude.ai
+---
 
-In Claude.ai settings, add a new MCP connector:
+### 6. Expose the server with ngrok
+
+Claude.ai requires a **publicly reachable HTTPS URL** to connect to your MCP server. Since the server runs locally, you need to tunnel it using [ngrok](https://ngrok.com).
+
+**Install ngrok** (if you haven't already):
+```bash
+# macOS
+brew install ngrok
+
+# Windows (winget)
+winget install ngrok
+
+# Or download directly from https://ngrok.com/download
+```
+
+**Start the tunnel** (in a separate terminal, while the server is running):
+```bash
+ngrok http 5000
+```
+
+ngrok will print something like:
+```
+Forwarding  https://a1b2-203-0-113-42.ngrok-free.app -> http://localhost:5000
+```
+
+Copy the `https://...ngrok-free.app` URL — you'll use this in the next step.
+
+> **Note:** The ngrok URL changes every time you restart ngrok on the free plan. You'll need to update the connector URL in Claude.ai whenever this happens. A paid ngrok plan gives you a static domain.
+
+---
+
+### 7. Connect Claude.ai
+
+In Claude.ai settings → **Connectors** → **Add connector**:
 
 - **Name:** dotnet-mcp-server (or anything you like)
-- **URL:** `http://localhost:5000/sse`
+- **URL:** `https://a1b2-203-0-113-42.ngrok-free.app/sse` ← your ngrok URL + `/sse`
 
 Claude will discover all available tools automatically.
+
+> **Tip:** Every time you restart ngrok, update this URL in Claude.ai connector settings.
 
 ---
 
