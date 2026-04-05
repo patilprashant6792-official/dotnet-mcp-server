@@ -7,55 +7,6 @@ using System.Text;
 
 namespace RisingTideAI.Trade.MCP.Host.MCPServers;
 
-/// <summary>
-/// C# file analysis and method extraction toolkit - PREFERRED over raw file reading.
-/// 
-/// WHY THESE TOOLS EXIST:
-/// - Extract structured metadata WITHOUT loading entire file (token-efficient)
-/// - Get method implementations with line numbers (precise code changes)
-/// - Understand class structure, dependencies, attributes, properties
-/// - Batch operations save ~300-500 tokens per additional file/method
-/// 
-/// TOKEN OPTIMIZATION CRITICAL:
-/// File Size Decision Tree:
-///   ≤ 15 KB (≈500 lines) → read_file_content is FASTER and SIMPLER
-///   > 15 KB              → analyze_c_sharp_file + fetch_method_implementation (TOKEN-EFFICIENT)
-/// 
-/// BATCH MODE (HIGH PRIORITY):
-/// - analyze_c_sharp_file: 'File1.cs,File2.cs,File3.cs' → Saves ~300 tokens per extra file
-/// - fetch_method_implementation: 'Method1,Method2,Method3' → Saves ~500 tokens per extra method
-/// - NO SPACES in comma-separated lists
-/// - Use batch mode WHENEVER analyzing multiple related files/methods
-/// 
-/// WHEN TO USE:
-/// 1. **analyze_c_sharp_file** - FIRST STEP:
-///    - Get class structure, method signatures, properties, fields
-///    - Identify constructor dependencies (DI analysis)
-///    - Classify file type (controller, service, repository, model)
-///    - See ALL members before drilling into specifics
-///    - BATCH: Analyze multiple related files (Service + Controller + Repository)
-/// 
-/// 2. **fetch_method_implementation** - SECOND STEP:
-///    - Get complete method body with line numbers
-///    - Extract specific logic for modification
-///    - Understand implementation details
-///    - BATCH: Fetch multiple related methods (CRUD operations)
-/// 
-/// 3. **read_file_content** - LAST RESORT:
-///    - ONLY for small files (≤15 KB)
-///    - ONLY for non-C# files (Dockerfile, launchSettings.json)
-///    - BLOCKED: appsettings.json, secrets, .env, credentials
-/// 
-/// CRITICAL WORKFLOW:
-/// ❌ WRONG: read_file_content for 2000-line service → Wastes 10,000 tokens
-/// ✅ RIGHT: analyze_c_sharp_file → See methods → fetch_method_implementation for 2 methods → Saves 8,000 tokens
-/// 
-/// WHEN NOT TO USE:
-/// - Files without classes/methods (configs, JSON, XML) → Use read_file_content
-/// - Understanding WHO calls a method → Use MethodCallGraphTools
-/// - Global search across projects → Use CodeSearchTools
-/// </summary>
-/// 
 [McpServerToolType]
 public class CodeAnalysisTools
 {
@@ -99,7 +50,6 @@ public class CodeAnalysisTools
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToArray();
 
-            // Single file — no overhead of Task.WhenAll
             if (filePaths.Length == 1)
             {
                 var analysis = await _projectSkeletonService.AnalyzeCSharpFileAsync(
@@ -109,7 +59,6 @@ public class CodeAnalysisTools
                 return _markdownFormatter.FormatCSharpAnalysis(analysis);
             }
 
-            // Batch mode — all cache/Redis reads fire concurrently
             var fetchTasks = filePaths.Select(async path =>
             {
                 try
@@ -141,7 +90,6 @@ public class CodeAnalysisTools
             if (analyses.Count == 0)
                 throw new ArgumentException($"No valid files found.\n\nErrors:\n{string.Join("\n", errors)}");
 
-            // Format batch results
             var sb = new StringBuilder();
             sb.AppendLine($"# Batch C# File Analysis: {analyses.Count} file(s)");
             sb.AppendLine();
@@ -226,12 +174,10 @@ public class CodeAnalysisTools
     {
         try
         {
-            // Check if batch mode (comma-separated method names)
             var methodNames = methodName.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
             if (methodNames.Length == 1)
             {
-                // SINGLE MODE
                 var implementation = await _projectSkeletonService.FetchMethodImplementationAsync(
                     projectName, relativeFilePath, methodNames[0], className);
 
@@ -239,7 +185,6 @@ public class CodeAnalysisTools
             }
             else
             {
-                // BATCH MODE
                 var implementations = await _projectSkeletonService.FetchMethodImplementationsBatchAsync(
                     projectName, relativeFilePath, methodNames, className);
 
@@ -282,11 +227,14 @@ public class CodeAnalysisTools
         try
         {
             var result = await _projectSkeletonService.ReadFileContentAsync(projectName, relativeFilePath);
-            return result.RawContent; // ✅ Just return the content directly
+            var rawLines = result.RawContent.Split('\n');
+            var sb = new System.Text.StringBuilder();
+            for (var i = 0; i < rawLines.Length; i++)
+                sb.Append($"{i + 1,4} | {rawLines[i].TrimEnd('\r')}\n");
+            return sb.ToString();
         }
         catch (FileAccessDeniedException ex)
         {
-            // Return structured error response in TOML format
             var errorResult = new
             {
                 Success = false,

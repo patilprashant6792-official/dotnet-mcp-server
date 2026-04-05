@@ -7,48 +7,6 @@ using System.Threading.Channels;
 
 namespace RisingTideAI.Trade.MCP.Host.MCPServers;
 
-/// <summary>
-/// Method dependency analysis - WHO calls this method and WHERE.
-/// 
-/// WHY THIS EXISTS:
-/// - CRITICAL for understanding impact before modifying methods
-/// - Prevents breaking changes by revealing hidden dependencies
-/// - Shows exact caller locations (file path, line number, class)
-/// - Identifies refactoring ripple effects
-/// 
-/// WHEN TO USE (HIGH PRIORITY):
-/// 1. Before modifying public method signatures
-/// 2. Before deleting methods (ensure nothing calls it)
-/// 3. Before changing method behavior (understand all usage contexts)
-/// 4. Analyzing architectural dependencies (controller → service → repository)
-/// 5. Finding "God methods" called from everywhere
-/// 
-/// WHAT IT RETURNS:
-/// - Caller file paths (exact location)
-/// - Line numbers where method is called
-/// - Calling class names (with resolution hints)
-/// - Test file callers (optional, disabled by default)
-/// - Class resolution hints for fetching caller implementations
-/// 
-/// WORKFLOW INTEGRATION:
-/// Step 1: analyze_method_call_graph → Identify all callers
-/// Step 2: For each caller → fetch_method_implementation → Understand caller context
-/// Step 3: Modify original method + update all callers if needed
-/// 
-/// REAL-WORLD EXAMPLE:
-/// You want to add a parameter to UserService.GetUser(int id)
-/// 1. analyze_method_call_graph('UserService.cs', 'GetUser')
-///    → Returns: UserController.cs:45, AdminController.cs:89, UserRepository.cs:120
-/// 2. fetch_method_implementation for each caller → See how GetUser is currently used
-/// 3. Safely add parameter, update all 3 callers with correct context
-/// 
-/// TOKEN COST: ~500-2000 tokens depending on method popularity
-/// 
-/// WHEN NOT TO USE:
-/// - Understanding method implementation - use CodeAnalysisTools.FetchMethodImplementation
-/// - Finding where method is defined - use CodeSearchTools
-/// - Analyzing private methods with no external callers (waste of tokens)
-/// </summary>
 [McpServerToolType]
 public class MethodCallGraphTools
 {

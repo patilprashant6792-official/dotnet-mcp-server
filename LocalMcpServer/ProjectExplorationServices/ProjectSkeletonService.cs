@@ -410,7 +410,10 @@ Use this tool to understand project architecture, analyze dependencies, review p
             XmlDocumentation = xmlDocumentation,
             MethodBody = targetMethod.Body?.ToString() ?? string.Empty,
             FullMethodCode = targetMethod.ToString(),
-            LineNumber = targetMethod.GetLocation().GetLineSpan().StartLinePosition.Line + 1,
+            // FIXED — line of the first attribute/annotation if present, else the signature itself
+            LineNumber = (targetMethod.AttributeLists.Count > 0
+    ? targetMethod.AttributeLists[0].GetLocation().GetLineSpan().StartLinePosition.Line
+    : targetMethod.GetLocation().GetLineSpan().StartLinePosition.Line) + 1,
             IsAsync = targetMethod.Modifiers.Any(m => m.Text == "async"),
             IsStatic = targetMethod.Modifiers.Any(m => m.Text == "static"),
             IsVirtual = targetMethod.Modifiers.Any(m => m.Text == "virtual"),
@@ -539,7 +542,9 @@ Use this tool to understand project architecture, analyze dependencies, review p
                 XmlDocumentation = xmlDocumentation,
                 MethodBody = targetMethod.Body?.ToString() ?? string.Empty,
                 FullMethodCode = targetMethod.ToString(),
-                LineNumber = targetMethod.GetLocation().GetLineSpan().StartLinePosition.Line + 1,
+                LineNumber = (targetMethod.AttributeLists.Count > 0
+                    ? targetMethod.AttributeLists[0].GetLocation().GetLineSpan().StartLinePosition.Line
+                    : targetMethod.GetLocation().GetLineSpan().StartLinePosition.Line) + 1,
                 IsAsync = targetMethod.Modifiers.Any(m => m.Text == "async"),
                 IsStatic = targetMethod.Modifiers.Any(m => m.Text == "static"),
                 IsVirtual = targetMethod.Modifiers.Any(m => m.Text == "virtual"),

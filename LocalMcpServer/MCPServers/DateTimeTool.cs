@@ -3,21 +3,6 @@ using System.ComponentModel;
 
 namespace RisingTideAI.Trade.MCP.Host.MCPServers;
 
-/// <summary>
-/// Provides current date/time information in multiple formats and timezones.
-/// 
-/// WHY USE THIS:
-/// - AI models need current date context for time-sensitive queries (web searches, filtering, date ranges)
-/// - Ensures accurate "today", "this month", "this year" references
-/// - Critical for search queries requiring year (e.g., "latest .NET releases 2025")
-/// 
-/// WHEN TO USE:
-/// - Before any web search that needs current context
-/// - When user asks "today", "current", "latest" related questions
-/// - To validate date-based user inputs
-/// 
-/// TOKEN COST: ~150 tokens (lightweight, safe to call frequently)
-/// </summary>
 [McpServerToolType]
 public class DateTimeTool
 {

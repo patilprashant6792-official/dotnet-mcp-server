@@ -5,44 +5,6 @@ using System.Text.Json;
 
 namespace RisingTideAI.Trade.MCP.Host.MCPServers;
 
-/// <summary>
-/// Project architecture exploration - folder structures, file trees, and file discovery.
-/// 
-/// WHY THIS EXISTS:
-/// - Understand existing project architecture before modifications
-/// - Discover where to place new files following existing patterns
-/// - Locate specific files in large projects (>1000 files)
-/// - Identify project conventions (layering, naming, folder organization)
-/// - See complete solution structure with .csproj packages
-/// 
-/// CRITICAL USE CASES:
-/// 1. "Add a new feature" → Call get_project_skeleton FIRST to understand structure
-/// 2. "Where should I put this code?" → See existing patterns (Controllers/, Services/, etc.)
-/// 3. Large folders (>50 files) → Use search_folder_files for pagination
-/// 4. Finding specific files → Use search_folder_files with searchPattern
-/// 
-/// TOKEN OPTIMIZATION:
-/// - get_project_skeleton: ~3000-8000 tokens depending on project size
-/// - Folders with >50 files are collapsed - use search_folder_files to explore
-/// - Use sinceTimestamp to get only recently modified files (incremental analysis)
-/// - Wildcard projectName='*' lists all available projects (cheap)
-/// 
-/// WORKFLOW INTEGRATION:
-/// Step 1: get_project_skeleton → Understand architecture
-/// Step 2: Identify target files/folders
-/// Step 3: Use CodeAnalysisTools for detailed C# analysis
-/// 
-/// WHEN TO USE:
-/// - ALWAYS before adding/modifying project files
-/// - User mentions "add controller", "create service", "new feature"
-/// - Understanding project layering (2-layer, 3-layer, microservices)
-/// - Verifying file existence before read operations
-/// 
-/// WHEN NOT TO USE:
-/// - Reading file content - use CodeAnalysisTools.AnalyzeCSharpFile instead
-/// - Method-level analysis - use CodeAnalysisTools.FetchMethodImplementation
-/// - Understanding code dependencies - use MethodCallGraphTools
-/// </summary>
 [McpServerToolType]
 public class ProjectSkeletonTools
 {

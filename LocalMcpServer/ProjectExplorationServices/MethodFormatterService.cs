@@ -64,11 +64,7 @@ public class MethodFormatterService : IMethodFormatterService
                 // Split full method code into lines
                 var codeLines = method.FullMethodCode.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
 
-                // Calculate starting line: subtract attribute count
-                var attributeLineCount = method.Attributes.Count;
-                var startingLine = method.LineNumber - attributeLineCount;
-
-                var currentLine = startingLine;
+                var currentLine = method.LineNumber;
                 foreach (var line in codeLines)
                 {
                     sb.AppendLine($"{currentLine,4} | {line}");
@@ -116,13 +112,6 @@ public class MethodFormatterService : IMethodFormatterService
             // Split full method code (which includes attributes) into lines
             var codeLines = methodInfo.FullMethodCode.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
             var currentLine = methodInfo.LineNumber;
-
-            // Adjust starting line if attributes exist (they come before the method)
-            var attributeCount = methodInfo.Attributes.Count;
-            if (attributeCount > 0)
-            {
-                currentLine -= attributeCount;
-            }
 
             foreach (var line in codeLines)
             {

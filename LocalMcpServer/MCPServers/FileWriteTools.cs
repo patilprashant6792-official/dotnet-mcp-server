@@ -6,24 +6,6 @@ using System.Text.Json;
 
 namespace RisingTideAI.Trade.MCP.Host.MCPServers;
 
-/// <summary>
-/// File system write tools — create, patch, move, delete files and folders.
-///
-/// SAFETY RULES (enforced by the service — no exceptions):
-///   • All paths must stay within the project root (traversal guard)
-///   • Blocked dirs: bin, obj, .git, .vs, .ssh, node_modules, backups, logs, packages
-///   • Blocked patterns: *secret*, *password*, *apikey*, *credential*, *token*, *.private.*
-///   • Git is your undo — no backups are created
-///
-/// LINE NUMBERS are always 1-based (matching fetch_method_implementation output).
-/// Use startLine=0 with Insert action to prepend content to the top of a file.
-///
-/// WORKFLOW:
-///   1. get_project_skeleton / get_file_info  → confirm paths exist
-///   2. fetch_method_implementation            → get exact line numbers
-///   3. edit_lines (batch patches)             → single atomic write
-///   4. analyze_c_sharp_file                   → verify result
-/// </summary>
 [McpServerToolType]
 public class FileWriteTools
 {
@@ -31,7 +13,6 @@ public class FileWriteTools
 
     public FileWriteTools(IFileModificationService svc) => _svc = svc;
 
-    // ── write_file ────────────────────────────────────────────────────────────
 
     [McpServerTool]
     [Description(
@@ -58,8 +39,6 @@ public class FileWriteTools
         var result = await _svc.WriteFilesAsync(projectName, files);
         return FormatBatch("write_file", result);
     }
-
-    // ── edit_lines ────────────────────────────────────────────────────────────
 
     [McpServerTool]
     [Description(
@@ -92,8 +71,6 @@ public class FileWriteTools
         return FormatBatch("edit_lines", result);
     }
 
-    // ── move_file ─────────────────────────────────────────────────────────────
-
     [McpServerTool]
     [Description(
         "Move or rename one or more files within the same project.\n" +
@@ -115,8 +92,6 @@ public class FileWriteTools
         return FormatBatch("move_file", result);
     }
 
-    // ── delete_file ───────────────────────────────────────────────────────────
-
     [McpServerTool]
     [Description(
         "Delete one or more files. Each file is independent — partial success is possible.\n" +
@@ -136,8 +111,6 @@ public class FileWriteTools
         return FormatBatch("delete_file", result);
     }
 
-    // ── create_folder ─────────────────────────────────────────────────────────
-
     [McpServerTool]
     [Description(
         "Create one or more folders (including nested paths) in one call.\n" +
@@ -156,8 +129,6 @@ public class FileWriteTools
         var result = await _svc.CreateFoldersAsync(projectName, paths);
         return FormatBatch("create_folder", result);
     }
-
-    // ── move_folder ───────────────────────────────────────────────────────────
 
     [McpServerTool]
     [Description(
@@ -182,8 +153,6 @@ public class FileWriteTools
             : $"❌ move_folder\n   {from} → {to}\n   Error: {result.Error}";
     }
 
-    // ── delete_folder ─────────────────────────────────────────────────────────
-
     [McpServerTool]
     [Description(
         "Delete one or more folders recursively.\n" +
@@ -205,8 +174,6 @@ public class FileWriteTools
         return FormatBatch("delete_folder", result);
     }
 
-    // ── get_file_info ─────────────────────────────────────────────────────────
-
     [McpServerTool]
     [Description(
         "Get metadata for one or more files without reading their content.\n" +
@@ -226,8 +193,6 @@ public class FileWriteTools
         var result = await _svc.GetFileInfoAsync(projectName, paths);
         return FormatFileInfo(result);
     }
-
-    // ── Formatting helpers ────────────────────────────────────────────────────
 
     private static string FormatBatch(string toolName, BatchOperationResult batch)
     {

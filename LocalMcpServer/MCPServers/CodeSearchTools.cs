@@ -6,64 +6,6 @@ using System.ComponentModel;
 
 namespace RisingTideAI.Trade.MCP.Host.MCPServers;
 
-/// <summary>
-/// Global code search across single or multiple projects simultaneously.
-/// 
-/// WHY THIS EXISTS:
-/// - Find classes, methods, properties, fields, interfaces by name or keyword
-/// - WILDCARD SUPPORT: Search ALL projects at once with projectName='*'
-/// - Security audits: Find all usages of sensitive APIs (Authorize, Encryption, etc.)
-/// - Dependency analysis: Locate all consumers of an interface/service
-/// - Refactoring impact: Find all references before renaming
-/// - Architectural analysis: Track patterns across entire codebase
-/// 
-/// CRITICAL USE CASES:
-/// 1. **Security Audits**:
-///    - search_code_globally('*', 'Authorize') → Find all authorization points
-///    - search_code_globally('*', 'Password') → Locate password handling
-///    - search_code_globally('*', 'ConnectionString') → Find DB connection usage
-/// 
-/// 2. **Dependency Analysis**:
-///    - search_code_globally('*', 'IUserService') → Find all service consumers
-///    - search_code_globally('*', 'Redis') → Locate all Redis usage
-///    - search_code_globally('RisingTideAPI', 'DbContext') → Find all EF contexts
-/// 
-/// 3. **Refactoring Impact**:
-///    - Before renaming: Find ALL usages across ALL projects
-///    - Before deleting: Verify no references exist
-///    - Before changing interface: See all implementations
-/// 
-/// WILDCARD MODE (POWERFUL):
-/// - projectName='*' → Search EVERYTHING simultaneously
-/// - Returns ranked results across ALL configured projects
-/// - Perfect for cross-project analysis (microservices, shared libraries)
-/// 
-/// FILTERING OPTIONS:
-/// - memberType: 'Class', 'Interface', 'Method', 'Property', 'Field', 'All'
-/// - caseSensitive: true/false (default: false for broader matches)
-/// - topK: Limit results (default: 20, increase for comprehensive analysis)
-/// 
-/// RETURNS:
-/// - Ranked results by relevance score
-/// - Exact file locations (project + path)
-/// - Member type (Class/Method/Property/etc.)
-/// - Surrounding context (file, namespace, class)
-/// 
-/// TOKEN COST: ~1000-3000 tokens depending on result count
-/// 
-/// WHEN TO USE:
-/// - User mentions "find all", "where is", "show me all"
-/// - Security review tasks
-/// - Understanding cross-project dependencies
-/// - Before major refactoring
-/// - Investigating architectural patterns
-/// 
-/// WHEN NOT TO USE:
-/// - You already know exact file location - use CodeAnalysisTools directly
-/// - Method implementation needed - use FetchMethodImplementation after finding location
-/// - Understanding method callers - use MethodCallGraphTools
-/// - Project structure exploration - use ProjectSkeletonTools
-/// </summary>
 [McpServerToolType]
 public class CodeSearchTools
 {
