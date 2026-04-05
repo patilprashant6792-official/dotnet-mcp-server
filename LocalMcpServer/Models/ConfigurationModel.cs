@@ -1,4 +1,4 @@
-﻿using MCP.Core.Services;
+﻿using MCP.Core.Models;
 
 namespace MCP.Core.Configuration;
 
