@@ -118,16 +118,7 @@ public class CSharpAnalysisBackgroundService : BackgroundService
 
     /// <summary>Non-blocking drain of any already-queued trigger names.</summary>
     private bool TryDrainNext([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? name)
-    {
-        // IAnalysisTriggerService doesn't expose TryRead directly, but we can
-        // check via a zero-timeout task — simplest is to cast to the concrete type.
-        // To keep the interface clean we expose a sync TryRead on the implementation.
-        if (_trigger is AnalysisTriggerService concrete)
-            return concrete.TryRead(out name);
-
-        name = null;
-        return false;
-    }
+        => _trigger.TryRead(out name);
 
     // ── Full pass ────────────────────────────────────────────────────────────
 
@@ -193,7 +184,7 @@ public class CSharpAnalysisBackgroundService : BackgroundService
 
                 var methodsAlreadyCached = await cache.MethodsExistAsync(projectName, rel);
 
-                var setAnalysisTask = cache.SetAsync(projectName, rel, analysis);
+                var setAnalysisTask = cache.SetAsync(projectName, $"{rel}::private", analysis);
                 var setMethodsTask = methodsAlreadyCached
                     ? Task.CompletedTask
                     : IndexMethodsAsync(projectName, rel, filePath, analysis, cache, ct);

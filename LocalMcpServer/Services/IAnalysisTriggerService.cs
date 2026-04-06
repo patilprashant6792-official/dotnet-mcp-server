@@ -14,4 +14,10 @@ public interface IAnalysisTriggerService
     /// Consumed exclusively by CSharpAnalysisBackgroundService.
     /// </summary>
     Task<string?> WaitForTriggerAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Non-blocking drain. Returns false immediately if no trigger is queued.
+    /// Used by the background service to batch deduplicate rapid-fire triggers.
+    /// </summary>
+    bool TryRead([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? projectName);
 }
