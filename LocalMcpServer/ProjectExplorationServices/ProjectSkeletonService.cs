@@ -24,44 +24,40 @@ public class ProjectSkeletonService : IProjectSkeletonService
         "bin", "obj", ".vs", ".git", "node_modules", "packages", ".idea", ".vscode", "TestResults"
     };
 
-    private readonly Dictionary<string, ProjectInfo> _projectMappings;
+    private readonly IProjectConfigService _projectConfigService;
+
+    // Always read live from Redis — never cached in-process.
+    // This ensures add/delete from config.html is reflected immediately.
+    private Dictionary<string, ProjectInfo> _projectMappings =>
+        _projectConfigService.LoadProjects()
+            .Projects
+            .Where(p => p.Enabled)
+            .ToDictionary(
+                p => p.Name,
+                p => new ProjectInfo { Path = p.Path, Description = p.Description }
+            );
 
     public ProjectSkeletonService(
-    IConfiguration configuration,
-    IProjectConfigService projectConfigService)
+        IConfiguration configuration,
+        IProjectConfigService projectConfigService)
     {
-       
-            // Fallback to projects.json from UI config
-            var projectConfig = projectConfigService.LoadProjects();
-            _projectMappings = projectConfig.Projects
-                .Where(p => p.Enabled) // Only load enabled projects
-                .ToDictionary(
-                    p => p.Name,
-                    p => new ProjectInfo
-                    {
-                        Path = p.Path,
-                        Description = p.Description
-                    }
-                );
+        _projectConfigService = projectConfigService ?? throw new ArgumentNullException(nameof(projectConfigService));
 
-            if (_projectMappings.Count == 0)
-            {
-                throw new InvalidOperationException(
-                    "No projects configured. Please configure projects via:\n" +
-                    "1. Config UI at http://localhost:5000/config.html\n" +
-                    "2. Or add 'ProjectMappings' section in appsettings.json");
-            }
-        
-    }
-
-    public ProjectSkeletonService(Dictionary<string, ProjectInfo> projectMappings)
-    {
-        _projectMappings = projectMappings ?? throw new ArgumentNullException(nameof(projectMappings));
+        // Eagerly validate on startup: fail fast if no projects configured
+        var mappings = _projectMappings;
+        if (mappings.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "No projects configured. Please configure projects via:\n" +
+                "1. Config UI at http://localhost:5000/config.html\n" +
+                "2. Or add 'ProjectMappings' section in appsettings.json");
+        }
     }
 
     public string GetToolDescription()
     {
-        var projectList = string.Join("\n", _projectMappings.Select(p =>
+        var mappings = _projectMappings;
+        var projectList = string.Join("\n", mappings.Select(p =>
             $"• {p.Key} - {p.Value.Description}"));
 
         return $@"Generates a comprehensive markdown-formatted skeleton of a .NET project including complete folder structure (ASCII tree), all .sln/.slnx solution files with full content, and all .csproj project files with full content. Automatically excludes build artifacts (bin/, obj/, .vs/, etc.).
