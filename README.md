@@ -371,6 +371,7 @@ Add to `claude_desktop_config.json`:
 ### NuGet exploration
 
 | Tool | Description |
+|------|-------------|
 | `search_nu_get_packages` | Queries NuGet.org by package ID. Returns version, download count, and tags. Use the full ID (`Microsoft.EntityFrameworkCore`, not `EFCore`). |
 | `get_nu_get_package_namespaces` | Downloads and unpacks the `.nupkg`, selects the correct target framework folder, and returns all exposed namespaces. |
 | `get_namespace_summary` | Reflects the actual DLL via `MetadataLoadContext` — returns all public types with full method, property, field, and event signatures. Cached in Redis for 7 days. |
