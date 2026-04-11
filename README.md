@@ -96,7 +96,7 @@ Supported write modes for `write_file`: `create` (fails if file exists), `overwr
 
 This is the most technically distinct feature of the server. When an AI is asked "how do I use method X from package Y", the standard answer comes from training data — which may be months or years behind the version you actually have installed. This server eliminates that entirely.
 
-Here is what happens when you call `get_namespace_summary`:
+Here is what happens when you first explore a package:
 
 1. **Version resolution** — `NuGet.Protocol` queries NuGet.org and resolves the exact version you specify (or latest stable). No guessing.
 2. **Package download** — The `.nupkg` is downloaded and unpacked into a temp directory. The `lib/` folder is inspected and the right `net*/` target framework folder is selected, with an automatic fallback chain (`net10.0` → `net9.0` → `net8.0` → `netstandard2.1` → ...) so you always get the closest match.
@@ -108,12 +108,36 @@ Here is what happens when you call `get_namespace_summary`:
 
 The result Claude receives is a set of valid, copy-paste-ready C# signatures reflecting the exact binary you are shipping against — not what the model thinks the API looks like.
 
+#### IntelliSense-style progressive exploration
+
+The exploration tools mirror exactly what a developer does in an IDE — not a bulk dump of everything at once. A human installs a package, types a `using`, picks a type from the autocomplete dropdown, calls a method, then presses F12 to inspect the return type. These tools follow the same sequence:
+
 ```
-search_nu_get_packages          ← confirm the exact NuGet package ID
-get_nu_get_package_namespaces   ← discover which namespaces the package exposes
-get_namespace_summary           ← all public types, methods, properties — from the DLL
-get_method_overloads            ← expand collapsed overload groups on demand
+get_package_namespaces          ← "I installed OpenAI — what namespaces does it expose?"
+get_namespace_types             ← "I added using OpenAI.Chat — what types exist?" (~10 tokens/type)
+get_type_surface(typeName)      ← "I picked ChatClient — what can I call on it?"
+get_type_shape(typeName)        ← "CompleteChat returned ChatCompletion — what's on it?"
+get_method_overloads(...)       ← expand collapsed overloads on demand
 ```
+
+Each step returns only what is needed at that moment. Nothing is dumped until asked for.
+
+**What gets suppressed automatically** — these exist in the DLL but carry no discovery value:
+- Empty shell types (0 methods, 0 properties, 0 constructors) — base/marker classes with no callable surface
+- SDK-internal properties (e.g. `JsonPatch& Patch`) — serialization infrastructure, never user-facing
+- Enum and struct types in the type index — shown as compact `[5 options]` hints; full values appear only when you call `get_type_shape` on them
+- All member details of types you haven't asked about yet — `get_namespace_types` gives you a type index with counts (`[6 ctors, 44 methods, 2 props]`), not the methods themselves
+
+**Token cost comparison on `OpenAI.Responses`:**
+
+| Approach | Tokens |
+|----------|--------|
+| Old: `get_namespace_summary` — full namespace dump | ~6 000 |
+| New: `get_package_namespaces` + `get_namespace_types` | ~250 |
+| New: + `get_type_surface(ResponsesClient)` | ~550 |
+| New: + `get_type_shape(CreateResponseOptions)` | ~800 total |
+
+The full-dump tool (`get_namespace_summary`, available in the legacy tools) still exists for cases where you genuinely need everything at once. The IntelliSense tools are the default path.
 
 ### Global code search with pagination
 
@@ -356,12 +380,23 @@ Add to `claude_desktop_config.json`:
 
 ### NuGet exploration
 
+**IntelliSense workflow (default — use these):**
+
 | Tool | Description |
 |------|-------------|
 | `search_nu_get_packages` | Queries NuGet.org by package ID. Returns version, download count, and tags. Use the full ID (`Microsoft.EntityFrameworkCore`, not `EFCore`). |
-| `get_nu_get_package_namespaces` | Downloads and unpacks the `.nupkg`, selects the correct target framework folder, and returns all exposed namespaces. |
-| `get_namespace_summary` | Reflects the actual DLL via `MetadataLoadContext` — returns all public types with full method, property, field, and event signatures. Cached in Redis for 7 days. |
-| `get_method_overloads` | Expands overload groups collapsed in `get_namespace_summary` into individual signatures with full parameter lists. |
+| `get_package_namespaces` | Lists all namespaces a package exposes. Always the first step on an unfamiliar package. Feeds into `get_namespace_types`. |
+| `get_namespace_types` | Type index for one namespace — names, kind (Class/Interface/Enum/Struct), and member count hints. ~10 tokens per type. No member details yet. |
+| `get_type_surface` | Constructors + methods of ONE type. For client/service types you instantiate and call. Methods collapsed; overloads shown as `+ N overloads`. |
+| `get_type_shape` | Properties of ONE type — its readable/writable shape. For result types and options/config classes. Enums and structs show their valid values. |
+| `get_method_overloads` | Expands overload groups collapsed in `get_type_surface` into individual signatures with full parameter lists. |
+
+**Legacy (full-dump — use when you need everything at once):**
+
+| Tool | Description |
+|------|-------------|
+| `get_nu_get_package_namespaces` | Same namespace list as `get_package_namespaces` — retained for compatibility. |
+| `get_namespace_summary` | Reflects the entire namespace via `MetadataLoadContext` — all public types with full signatures. ~2 000–6 000 tokens. Cached in Redis for 7 days. |
 
 ### Utility
 
@@ -387,12 +422,16 @@ Add to `claude_desktop_config.json`:
 
 ### Looking up a library API
 
+
 ```
-1. search_nu_get_packages("Microsoft.EntityFrameworkCore")   confirm the package ID
-2. get_nu_get_package_namespaces(packageId, version)         discover namespaces
-3. get_namespace_summary(namespace, packageId, version)      get all signatures
-4. get_method_overloads(...)                                 expand if needed
+1. get_package_namespaces(packageId)                  what namespaces does it expose?
+2. get_namespace_types(packageId, namespace)           what types are in this namespace?
+3. get_type_surface(packageId, namespace, typeName)    what can I call on this type?
+4. get_type_shape(packageId, namespace, returnType)    what does the return type look like?
+5. get_method_overloads(...)                           expand a specific overload group if needed
 ```
+
+Each call fetches only what the next decision requires — the same order a developer follows in the IDE.
 
 ---
 

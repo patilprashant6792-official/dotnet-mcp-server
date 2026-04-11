@@ -56,7 +56,7 @@ public class NuGetIntelliSenseExplorer
 
         foreach (var g in groups)
         {
-            sb.AppendLine($"## {g.Key}s");
+            sb.AppendLine($"## {(g.Key.ToString() == "Class" ? "Classes" : g.Key + "s")}");
             foreach (var t in g)
             {
                 var hint = BuildTypeHint(t);
@@ -271,6 +271,10 @@ public class NuGetIntelliSenseExplorer
     /// </summary>
     private static bool IsUsableType(TypeMetadata t)
     {
+        // Enums and structs are always usable — they have no methods/ctors but carry real value
+        if (t.Kind == TypeKind.Enum || t.Kind == TypeKind.Struct)
+            return true;
+
         // Empty shells — base/marker types with nothing callable
         if (t.Methods.Count == 0 && t.Properties.Count == 0 && t.Constructors.Count == 0)
             return false;
