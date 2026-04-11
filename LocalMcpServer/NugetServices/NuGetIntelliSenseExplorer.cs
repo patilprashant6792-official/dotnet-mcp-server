@@ -140,6 +140,28 @@ public class NuGetIntelliSenseExplorer
             sb.AppendLine();
         }
 
+        // Properties — builder/fluent types expose their API as typed sub-configuration properties.
+        // These are intentionally included here (not suppressed) so callers don't have to use
+        // get_type_shape as a workaround for types like LoggerConfiguration, DbContextOptionsBuilder, etc.
+        var instanceProps = type.Properties
+            .Where(p => !p.IsStatic && p.CanRead && !_suppressedProperties.Contains(p.Name))
+            .OrderBy(p => p.Name)
+            .ToList();
+
+        if (instanceProps.Count > 0)
+        {
+            sb.AppendLine("## Properties");
+            sb.AppendLine("```csharp");
+            foreach (var p in instanceProps)
+            {
+                var accessors = p.CanWrite ? "{ get; set; }" : "{ get; }";
+                sb.AppendLine($"{p.Visibility.ToLower()} {p.PropertyType.SimplifyTypeName()} {p.Name} {accessors}");
+            }
+            sb.AppendLine("```");
+            sb.AppendLine();
+        }
+
+
         sb.AppendLine("---");
         sb.AppendLine("Call get_type_shape(typeName) to inspect properties of any return type or options type.");
         sb.AppendLine("Call get_method_overloads(typeName, methodName) to expand collapsed overloads.");
