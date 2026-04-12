@@ -11,6 +11,7 @@ using StackExchange.Redis;
 using System;
 using System.Threading.RateLimiting;
 using MCP.Core.FileModificationService;
+using MCP.Core.DotnetCliService;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -54,6 +55,7 @@ builder.Services.AddSingleton<ICodeSearchFormatterService, CodeSearchFormatterSe
 // Project configuration service (singleton for file access)
 builder.Services.AddSingleton<IProjectConfigService, RedisProjectConfigService>();
 builder.Services.AddSingleton<IFileModificationService, FileModificationService>(); ;
+builder.Services.AddSingleton<IDotnetCliService, DotnetCliService>();
 builder.Services.AddSingleton<INuGetPackageLoader, NuGetPackageLoader>();
 builder.Services.AddSingleton<INuGetPackageExplorer>(sp =>
 {

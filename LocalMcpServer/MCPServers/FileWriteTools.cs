@@ -23,7 +23,7 @@ public class FileWriteTools
         "Parent directories are created automatically.\n" +
         "BATCH: pass multiple entries to scaffold an entire feature in one call.\n" +
         "WHEN TO USE: new files or full rewrites. For targeted edits use edit_lines.\n" +
-        "RETURNS: per-file success/error and final line count.")]
+        "RETURNS: per-file success/error, final line count, size in bytes, and last-modified timestamp.")]
     public async Task<string> WriteFile(
         [Description("Project name (e.g. 'RisingTideAPI')")]
         string projectName,
@@ -37,6 +37,7 @@ public class FileWriteTools
     {
         var files = Deserialize<List<WriteFileEntry>>(filesJson, "filesJson");
         var result = await _svc.WriteFilesAsync(projectName, files);
+        await EnrichWithFileInfo(projectName, result);
         return FormatBatch("write_file", result);
     }
 
@@ -57,7 +58,7 @@ public class FileWriteTools
         "   Correct:  one call with patches=[{lines 10-12}, {lines 45-50}, {lines 80-85}]\n" +
         "   Wrong:    three separate edit_lines calls — NEVER do this for the same file.\n\n" +
         "OVERLAP RULE: ranges must not overlap — the service validates this before any write.\n" +
-        "RETURNS: final line count and total lines affected.")]
+        "RETURNS: final line count, size in bytes, last-modified timestamp, and lines affected.")]
     public async Task<string> EditLines(
         [Description("Project name")]
         string projectName,
@@ -74,6 +75,7 @@ public class FileWriteTools
     {
         var patches = Deserialize<List<PatchOperation>>(patchesJson, "patchesJson");
         var result = await _svc.EditLinesAsync(projectName, relativeFilePath, patches);
+        await EnrichWithFileInfo(projectName, result);
         return FormatBatch("edit_lines", result);
     }
 
@@ -180,26 +182,6 @@ public class FileWriteTools
         return FormatBatch("delete_folder", result);
     }
 
-    [McpServerTool]
-    [Description(
-        "Get metadata for one or more files without reading their content.\n" +
-        "Returns: exists, line count, size in bytes, last modified (UTC ISO 8601), extension.\n" +
-        "USE THIS to check existence before write_file, or to verify line counts after edit_lines.\n" +
-        "TOKEN-FREE: never returns file content.\n" +
-        "RETURNS: per-file metadata or exists=false if not found.")]
-    public async Task<string> GetFileInfo(
-        [Description("Project name")]
-        string projectName,
-        [Description(
-            "JSON array of relative file paths to inspect:\n" +
-            "  [\"Services/OrderService.cs\", \"Services/IOrderService.cs\"]")]
-        string pathsJson)
-    {
-        var paths = Deserialize<List<string>>(pathsJson, "pathsJson");
-        var result = await _svc.GetFileInfoAsync(projectName, paths);
-        return FormatFileInfo(result);
-    }
-
     private static string FormatBatch(string toolName, BatchOperationResult batch)
     {
         var sb = new StringBuilder();
@@ -214,8 +196,10 @@ public class FileWriteTools
             if (r.Success)
             {
                 var meta = new List<string>();
-                if (r.LineCount.HasValue) meta.Add($"{r.LineCount} lines");
-                if (r.LinesAffected.HasValue) meta.Add($"{r.LinesAffected} lines affected");
+                if (r.LineCount.HasValue)      meta.Add($"{r.LineCount} lines");
+                if (r.LinesAffected.HasValue)  meta.Add($"{r.LinesAffected} lines affected");
+                if (r.SizeBytes.HasValue)      meta.Add($"{r.SizeBytes} bytes");
+                if (r.LastModifiedUtc != null) meta.Add($"modified: {r.LastModifiedUtc}");
                 var suffix = meta.Count > 0 ? $" ({string.Join(", ", meta)})" : "";
                 sb.AppendLine($"   ✅ {r.RelativeFilePath}{suffix}");
             }
@@ -231,25 +215,44 @@ public class FileWriteTools
         return sb.ToString().TrimEnd();
     }
 
-    private static string FormatFileInfo(BatchOperationResult batch)
+
+    /// <summary>
+    /// Calls GetFileInfoAsync for every succeeded result and merges disk-fresh
+    /// metadata (line count, size, modified) back in-place — eliminating the
+    /// trailing-newline line-count inconsistency and saving a round trip.
+    /// Enrichment is best-effort: a failure here never fails the write.
+    /// </summary>
+    private async Task EnrichWithFileInfo(string projectName, BatchOperationResult batch)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine($"📁 get_file_info — {batch.Results.Count} file(s)");
+        var successPaths = batch.Results
+            .Where(r => r.Success)
+            .Select(r => r.RelativeFilePath)
+            .ToList();
 
-        foreach (var r in batch.Results)
+        if (successPaths.Count == 0) return;
+
+        BatchOperationResult infoResult;
+        try { infoResult = await _svc.GetFileInfoAsync(projectName, successPaths); }
+        catch { return; }
+
+        var infoByPath = infoResult.Results
+            .Where(r => r.Success && r.Exists == true)
+            .ToDictionary(r => r.RelativeFilePath, StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 0; i < batch.Results.Count; i++)
         {
-            if (!r.Success)
-            { sb.AppendLine($"   ❌ {r.RelativeFilePath} — {r.Error}"); continue; }
+            var r = batch.Results[i];
+            if (!r.Success) continue;
+            if (!infoByPath.TryGetValue(r.RelativeFilePath, out var info)) continue;
 
-            if (r.Exists == false)
-            { sb.AppendLine($"   ✗  {r.RelativeFilePath} — does not exist"); continue; }
-
-            sb.AppendLine($"   ✓  {r.RelativeFilePath}");
-            sb.AppendLine($"      lines: {r.LineCount}  size: {r.SizeBytes} bytes  ext: {r.Extension}");
-            sb.AppendLine($"      modified: {r.LastModifiedUtc}");
+            batch.Results[i] = r with
+            {
+                LineCount       = info.LineCount,
+                SizeBytes       = info.SizeBytes,
+                LastModifiedUtc = info.LastModifiedUtc,
+                Extension       = info.Extension
+            };
         }
-
-        return sb.ToString().TrimEnd();
     }
 
     private static T Deserialize<T>(string json, string paramName)

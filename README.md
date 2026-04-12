@@ -45,8 +45,8 @@ This server uses a tiered reading strategy instead:
 | 2 | `analyze_c_sharp_file` | Class API surface: methods, properties, DI graph | ~300–500 |
 | 3 | `fetch_method_implementation` | Exact method body with line numbers | ~80–150 |
 | 4 | `read_file_content` | Raw content — non-C# files or tiny scripts. Supports line range (`startLine`/`endLine`) and grep (`query`) modes to avoid loading full files | full file / slice / matches |
-
-For a typical multi-service session this approach saves **10–20× tokens** compared to loading files directly. All four steps can batch: analyze 7 files or fetch 3 methods in a single tool call.
+| 5 | `search_folder_files` | Paginated file listing in a folder — use when `get_project_skeleton` shows 50+ files | ~50–100 |
+| 6 | `search_code_globally` | Name/keyword search across one or all projects; paginated up to 200 results | ~100–200 |
 
 ---
 
@@ -346,37 +346,36 @@ Add to `claude_desktop_config.json`:
 
 ---
 
-## All 20 MCP tools
+## All 22 MCP tools
 
 ### Code analysis
 
 | Tool | Description |
 |------|-------------|
-| `analyze_c_sharp_file` | Roslyn-extracted metadata: namespaces, classes, methods, properties, DI graph, line ranges. Batch mode: comma-separated paths, no spaces. |
-| `fetch_method_implementation` | Complete method body with per-line line numbers. Batch mode: comma-separated method names. |
-| `read_file_content` | Raw file content with three modes: **full file** (default), **line range** (`startLine` + `endLine`, 1-based inclusive, `endLine` clamped to EOF), **search/grep** (`query`, case-insensitive substring — returns only matching lines with line numbers). Modes are mutually exclusive. Blocked for `appsettings.json`, secrets, `.env`, and `bin/`/`obj/` paths. |
-| `analyze_method_call_graph` | All callers (file, class, line) and outgoing calls for a method. Paginated — `page` / `pageSize` up to 200. |
+| `analyze_c_sharp_file` | Roslyn-extracted metadata: namespaces, classes, methods, properties, DI graph, line ranges. Batch mode: comma-separated paths, no spaces. Toggle `includePrivateMembers=true` for internals. |
+| `fetch_method_implementation` | Complete method body with per-line line numbers. Batch mode: comma-separated method names from the same file. |
+| `read_file_content` | Raw file content with three modes: **full file** (default), **line range** (`startLine` + `endLine`, 1-based inclusive), **search/grep** (`query`, case-insensitive substring — returns only matching lines with line numbers). Modes are mutually exclusive. Blocked for `appsettings.json`, secrets, `.env`, and `bin/`/`obj/` paths. |
+| `analyze_method_call_graph` | All callers (file, class, line) and outgoing calls for a method. Optionally includes test files (`includeTests`). Paginated — `page` / `pageSize` up to 200. |
 
 ### Project exploration
 
 | Tool | Description |
 |------|-------------|
 | `get_project_skeleton` | ASCII folder tree with file sizes and NuGet package list. Pass `"*"` to list all registered projects. Supports `sinceTimestamp` for incremental diffs. |
-| `search_folder_files` | Paginated file listing within a folder. Optional filename filter. Use when a folder has 50+ files. |
-| `search_code_globally` | Name/keyword search across one project or all (`"*"`). Filters by member type. Paginated — `page` / `pageSize` up to 200. |
+| `search_folder_files` | Paginated file listing within a folder. Optional `searchPattern` filename filter (case-insensitive). Use when a folder has 50+ files. |
+| `search_code_globally` | Name/keyword search across one project or all (`"*"`). Optional `memberType` filter (Class/Interface/Method/Property/Field/All). Optional `caseSensitive` flag. Paginated — `page` / `pageSize` up to 200. |
 
 ### File operations
 
 | Tool | Description |
 |------|-------------|
-| `write_file` | Create or overwrite files. Modes: `create` / `overwrite` / `upsert`. Parent dirs created automatically. Batch supported. |
-| `edit_lines` | Apply multiple `patch` / `insert` / `delete` / `append` operations to a file atomically. Bottom-up application. Overlap-validated. |
-| `move_file` | Move or rename files. All-or-nothing batch: validation runs on every destination before any file moves. |
+| `write_file` | Create or overwrite files. Modes: `create` (fails if exists) / `overwrite` (fails if missing) / `upsert` (always succeeds). Parent dirs created automatically. Batch supported. |
+| `edit_lines` | Apply multiple `patch` / `insert` / `delete` / `append` operations to a file atomically. All patches validated then applied bottom-up — supply original line numbers from your last read. Overlap-validated. |
+| `move_file` | Move or rename files. Same-folder destination = rename. Cross-folder = move. All-or-nothing batch: all destinations validated before any file moves. |
 | `delete_file` | Delete files. Each file is independent — partial success is possible. Blocked paths enforced. |
-| `create_folder` | Create one or more folders including nested paths. Idempotent. |
-| `move_folder` | Move or rename a folder. Single operation only (high-impact). Evicts all Redis keys under the old path before moving. |
-| `delete_folder` | Recursively delete folders. Deepest-first ordering. Non-existent folders silently skipped. |
-| `get_file_info` | Metadata only — existence, line count, byte size, last modified (UTC ISO 8601). Never reads content. |
+| `create_folder` | Create one or more folders including nested paths. Idempotent — existing folders are not an error. |
+| `move_folder` | Move or rename a folder. Single operation only (high-impact). Evicts all Redis keys under the old path before moving. Does not update C# namespaces. |
+| `delete_folder` | Recursively delete folders. Deepest-first ordering. Non-existent folders silently skipped. Blocked: `bin/`, `obj/`, `.git/`, `.vs/`, `node_modules/`, `logs/`. |
 
 ### NuGet exploration
 
@@ -384,26 +383,24 @@ Add to `claude_desktop_config.json`:
 
 | Tool | Description |
 |------|-------------|
-| `search_nu_get_packages` | Queries NuGet.org by package ID. Returns version, download count, and tags. Use the full ID (`Microsoft.EntityFrameworkCore`, not `EFCore`). |
+| `search_nu_get_packages` | Queries NuGet.org by package ID or keywords. Returns version, download count, and tags. Use the full ID (`Microsoft.EntityFrameworkCore`, not `EFCore`). |
 | `get_package_namespaces` | Lists all namespaces a package exposes. Always the first step on an unfamiliar package. Feeds into `get_namespace_types`. |
-| `get_namespace_types` | Type index for one namespace — names, kind (Class/Interface/Enum/Struct), and member count hints. ~10 tokens per type. No member details yet. |
+| `get_namespace_types` | Type index for one namespace — names, kind (Class/Interface/Enum/Struct), and member count hints (`[2 ctors, 14 methods]`). ~10 tokens per type. No member details yet. |
 | `get_type_surface` | Constructors + methods of ONE type. For client/service types you instantiate and call. Methods collapsed; overloads shown as `+ N overloads`. |
 | `get_type_shape` | Properties of ONE type — its readable/writable shape. For result types and options/config classes. Enums and structs show their valid values. |
 | `get_method_overloads` | Expands overload groups collapsed in `get_type_surface` into individual signatures with full parameter lists. |
 
-**Legacy (full-dump — use when you need everything at once):**
+### .NET CLI
 
 | Tool | Description |
 |------|-------------|
-| `get_nu_get_package_namespaces` | Same namespace list as `get_package_namespaces` — retained for compatibility. |
-| `get_namespace_summary` | Reflects the entire namespace via `MetadataLoadContext` — all public types with full signatures. ~2 000–6 000 tokens. Cached in Redis for 7 days. |
+| `execute_dotnet_command` | Runs `dotnet build` or `dotnet add package` against a configured project. Supported commands: `build` (clean + build by default; `--no-clean` for incremental, ~5× faster), `add-package` (installs a NuGet package by ID and optional version). Returns structured Roslyn diagnostics (severity, code, file, line, column, message) — not raw text. Flags: `--no-clean` \| `--warnings` \| `--page <n>` \| `--page-size <n>` \| `--target <path>`. Resolves build target automatically: solution file at root → single `.csproj` anywhere in tree → ambiguous (returns `availableTargets` list so Claude can re-call with `--target`). |
 
 ### Utility
 
 | Tool | Description |
 |------|-------------|
-| `get_date_time` | Current date/time in UTC, server local time, or any IANA timezone (e.g. `Asia/Kolkata`). |
-
+| `get_date_time` | Current date/time in UTC, server local time, or any IANA timezone (e.g. `Asia/Kolkata`). Returns `localDateTime`, `utcDateTime`, `timeZone`, and `unixTimestamp`. |
 ---
 
 ## Recommended workflows
@@ -417,11 +414,21 @@ Add to `claude_desktop_config.json`:
 4. fetch_method_implementation("MyApi", "Svc/A.cs", "ProcessOrder")   read the method
 5. analyze_method_call_graph("MyApi", "Svc/A.cs", "ProcessOrder")      who calls it?
 6. edit_lines(...)                               make the change
-7. analyze_c_sharp_file(...)                     verify the result
+7. execute_dotnet_command("MyApi", "build")      verify compilation — catch errors before moving on
+```
+
+### Installing a NuGet package and using it
+
+```
+1. search_nu_get_packages("Serilog")                      find the exact package ID
+2. execute_dotnet_command("MyApi", "add-package", ["Serilog", "4.2.0"])   install it
+3. execute_dotnet_command("MyApi", "build")               confirm it resolves cleanly
+4. get_package_namespaces("Serilog")                      explore what it exposes
+5. get_namespace_types("Serilog", "Serilog")              find the types
+6. get_type_surface("Serilog", "Serilog", "Log")          see what you can call
 ```
 
 ### Looking up a library API
-
 
 ```
 1. get_package_namespaces(packageId)                  what namespaces does it expose?
