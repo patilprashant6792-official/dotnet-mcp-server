@@ -49,8 +49,14 @@ public class FileWriteTools
         "  • insert — insert content after startLine; use startLine=0 to prepend\n" +
         "  • delete — remove startLine..endLine; content is ignored\n" +
         "  • append — add content at end of file; line params ignored\n\n" +
+        "🔴 MANDATORY BATCHING RULE — violations cause wrong-place edits:\n" +
+        "   When making multiple changes to the same file, you MUST send ALL patches in a SINGLE\n" +
+        "   edit_lines call. The service applies them bottom-up internally, so line numbers stay\n" +
+        "   correct across all patches. Splitting into separate calls means the second call uses\n" +
+        "   stale cached line numbers and lands at the WRONG LINE every time.\n" +
+        "   Correct:  one call with patches=[{lines 10-12}, {lines 45-50}, {lines 80-85}]\n" +
+        "   Wrong:    three separate edit_lines calls — NEVER do this for the same file.\n\n" +
         "OVERLAP RULE: ranges must not overlap — the service validates this before any write.\n" +
-        "MULTI-PATCH: always batch all edits to the same file into one call to avoid line-number drift.\n" +
         "RETURNS: final line count and total lines affected.")]
     public async Task<string> EditLines(
         [Description("Project name")]

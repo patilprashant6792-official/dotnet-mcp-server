@@ -44,7 +44,7 @@ This server uses a tiered reading strategy instead:
 | 1 | `get_project_skeleton` | Full folder tree, file sizes, NuGet packages | ~200 |
 | 2 | `analyze_c_sharp_file` | Class API surface: methods, properties, DI graph | ~300–500 |
 | 3 | `fetch_method_implementation` | Exact method body with line numbers | ~80–150 |
-| 4 | `read_file_content` | Raw content — non-C# files or tiny scripts only | full file |
+| 4 | `read_file_content` | Raw content — non-C# files or tiny scripts. Supports line range (`startLine`/`endLine`) and grep (`query`) modes to avoid loading full files | full file / slice / matches |
 
 For a typical multi-service session this approach saves **10–20× tokens** compared to loading files directly. All four steps can batch: analyze 7 files or fetch 3 methods in a single tool call.
 
@@ -354,7 +354,7 @@ Add to `claude_desktop_config.json`:
 |------|-------------|
 | `analyze_c_sharp_file` | Roslyn-extracted metadata: namespaces, classes, methods, properties, DI graph, line ranges. Batch mode: comma-separated paths, no spaces. |
 | `fetch_method_implementation` | Complete method body with per-line line numbers. Batch mode: comma-separated method names. |
-| `read_file_content` | Raw file content. Blocked for `appsettings.json`, secrets, `.env`, and `bin/`/`obj/` paths. |
+| `read_file_content` | Raw file content with three modes: **full file** (default), **line range** (`startLine` + `endLine`, 1-based inclusive, `endLine` clamped to EOF), **search/grep** (`query`, case-insensitive substring — returns only matching lines with line numbers). Modes are mutually exclusive. Blocked for `appsettings.json`, secrets, `.env`, and `bin/`/`obj/` paths. |
 | `analyze_method_call_graph` | All callers (file, class, line) and outgoing calls for a method. Paginated — `page` / `pageSize` up to 200. |
 
 ### Project exploration

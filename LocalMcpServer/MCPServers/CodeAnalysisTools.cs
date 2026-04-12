@@ -212,26 +212,98 @@ public class CodeAnalysisTools
     }
 
     [McpServerTool]
-    [Description("LAST RESORT: Reads raw file content for source code and safe configuration files. " +
-        "SECURITY: Blocks sensitive files (appsettings.json, secrets, credentials, .env). " +
-        "DECISION RULE: Use ONLY for files ≤15 KB or non-C# files (Dockerfile, launchSettings.json). " +
-        "For C# files >15 KB, use analyze_c_sharp_file + fetch_method_implementation instead (massive token savings). " +
-        "Use for: Program.cs, small controllers, Dockerfile, non-sensitive configs.")]
+    [Description(
+        "LAST RESORT: Reads raw file content for source code and safe configuration files.\n" +
+        "SECURITY: Blocks sensitive files (appsettings.json, secrets, credentials, .env).\n" +
+        "DECISION RULE: Use ONLY for files ≤15 KB or non-C# files (Dockerfile, launchSettings.json).\n" +
+        "For C# files >15 KB, use analyze_c_sharp_file + fetch_method_implementation instead (massive token savings).\n\n" +
+        "MODES (mutually exclusive — pick one):\n" +
+        "  • Full file      — omit all optional params (current default behaviour)\n" +
+        "  • Line range     — provide startLine + endLine to fetch a specific slice (1-based, inclusive)\n" +
+        "  • Search / grep  — provide query to return all matching lines with their line numbers (case-insensitive)\n\n" +
+        "EXAMPLES:\n" +
+        "  read_file_content(proj, 'Program.cs')                          → full file\n" +
+        "  read_file_content(proj, 'Program.cs', startLine=10, endLine=40) → lines 10-40 only\n" +
+        "  read_file_content(proj, 'Program.cs', query='AddSingleton')    → all lines containing 'AddSingleton'\n\n" +
+        "RETURNS: numbered lines. Range/search modes save tokens when you only need part of a file.")]
     public async Task<string> ReadFileContent(
         [Description("Required: Project name")]
         string projectName,
         [Description("Required: Relative file path from project root (e.g., 'Program.cs', 'Dockerfile'). " +
             "⚠️ BLOCKED: appsettings.json, secrets.json, .env, credentials, bin/, obj/, node_modules/")]
-        string relativeFilePath)
+        string relativeFilePath,
+        [Description("Optional (range mode): First line to return, 1-based inclusive. Must be paired with endLine.")]
+        int? startLine = null,
+        [Description("Optional (range mode): Last line to return, 1-based inclusive. Must be paired with startLine.")]
+        int? endLine = null,
+        [Description("Optional (search mode): Case-insensitive substring. Returns only lines that contain this text, each prefixed with its line number. Mutually exclusive with startLine/endLine.")]
+        string? query = null)
     {
+        // Guard: mutually exclusive modes
+        if (query != null && (startLine != null || endLine != null))
+            return "Error: 'query' and 'startLine'/'endLine' are mutually exclusive. Use one mode at a time.";
+
+        // Guard: startLine/endLine must be paired
+        if ((startLine == null) != (endLine == null))
+            return "Error: 'startLine' and 'endLine' must both be provided together.";
+
         try
         {
             var result = await _projectSkeletonService.ReadFileContentAsync(projectName, relativeFilePath);
             var rawLines = result.RawContent.Split('\n');
-            var sb = new System.Text.StringBuilder();
-            for (var i = 0; i < rawLines.Length; i++)
-                sb.Append($"{i + 1,4} | {rawLines[i].TrimEnd('\r')}\n");
-            return sb.ToString();
+            var totalLines = rawLines.Length;
+
+            // ── Search mode ────────────────────────────────────────────────
+            if (query != null)
+            {
+                var sb = new System.Text.StringBuilder();
+                var matchCount = 0;
+
+                for (var i = 0; i < totalLines; i++)
+                {
+                    if (rawLines[i].Contains(query, StringComparison.OrdinalIgnoreCase))
+                    {
+                        sb.Append($"{i + 1,4} | {rawLines[i].TrimEnd('\r')}\n");
+                        matchCount++;
+                    }
+                }
+
+                return matchCount == 0
+                    ? $"No lines found matching '{query}' in {relativeFilePath} ({totalLines} lines searched)."
+                    : $"// {matchCount} match(es) for '{query}' in {relativeFilePath}\n" + sb;
+            }
+
+            // ── Range mode ─────────────────────────────────────────────────
+            if (startLine != null)
+            {
+                var start = startLine.Value;
+                var end = endLine!.Value;
+
+                if (start < 1 || end < 1)
+                    return "Error: 'startLine' and 'endLine' must be >= 1.";
+
+                if (start > end)
+                    return $"Error: 'startLine' ({start}) must be <= 'endLine' ({end}).";
+
+                if (start > totalLines)
+                    return $"Error: 'startLine' ({start}) exceeds file length ({totalLines} lines).";
+
+                // Clamp end to actual file length (lenient — no error for over-read)
+                end = Math.Min(end, totalLines);
+
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine($"// Lines {start}-{end} of {totalLines} — {relativeFilePath}");
+                for (var i = start - 1; i < end; i++)
+                    sb.Append($"{i + 1,4} | {rawLines[i].TrimEnd('\r')}\n");
+
+                return sb.ToString();
+            }
+
+            // ── Full file mode (default) ────────────────────────────────────
+            var output = new System.Text.StringBuilder();
+            for (var i = 0; i < totalLines; i++)
+                output.Append($"{i + 1,4} | {rawLines[i].TrimEnd('\r')}\n");
+            return output.ToString();
         }
         catch (FileAccessDeniedException ex)
         {
@@ -267,7 +339,7 @@ public class CodeAnalysisTools
                 Suggestions = new[]
                 {
                     "Use 'get_project_skeleton' to see all available files in the project.",
-                    "Verify the file path is correct and uses forward slashes (/) or backslashes (\\).",
+                    "Verify the file path is correct and uses forward slashes (/) or backslashes (\\\\).",
                     "Check if the file exists in the project directory."
                 }
             };
