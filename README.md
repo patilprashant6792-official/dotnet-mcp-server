@@ -6,6 +6,11 @@ Built on **.NET 10** · Powered by **Roslyn** · Backed by **Redis** · Reflecte
 
 ---
 
+## Featured On
+
+- [I Just Wanted Claude to Stop Hallucinating My NuGet APIs. Somehow I Ended Up Building a Full C# Dev Assistant.](https://dev.to/prashant_patil_9e62d3fa8a/i-just-wanted-claude-to-stop-hallucinating-my-nuget-apis-somehow-i-ended-up-building-a-full-c-dev-12om) — dev.to
+
+
 ## Why this exists
 
 AI coding tools have three silent killers in .NET:
