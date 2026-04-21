@@ -30,8 +30,14 @@ namespace RisingTideAI.Trade.MCP.Host.MCPServers;
 ///             Returns properties only of ONE type.
 ///             Equivalent to F12 (Go To Definition) on a return or options type.
 ///
-///   Step 4  — get_method_overloads (existing tool)
+///   Step 4  — get_method_overloads
 ///             "CompleteChat shows '+ 2 overloads' — show all signatures."
+///
+///   Step 5  — get_member_xml_doc
+///             "What does CompleteChat actually do? What are the params for?"
+///             Returns full XML docs: summary, params, returns, remarks, example, exceptions.
+///             Only available for packages that ship XML docs (Microsoft SDKs, well-maintained OSS).
+///             Call AFTER get_type_surface / get_type_shape reveals a member you need to understand.
 ///
 /// WHAT IS SUPPRESSED vs get_namespace_summary:
 ///   - Empty shell types (0 methods, 0 properties, 0 constructors)
@@ -46,17 +52,20 @@ public class NuGetIntelliSenseTools
     private readonly INuGetPackageExplorer _packageExplorer;
     private readonly ITomlSerializerService _tomlSerializer;
     private readonly INuGetSearchService _nugetService;
+    private readonly INuGetXmlDocCache _xmlDocCache;
 
     public NuGetIntelliSenseTools(
         NuGetIntelliSenseExplorer explorer,
         INuGetPackageExplorer packageExplorer,
         ITomlSerializerService tomlSerializer,
-        INuGetSearchService nugetService)
+        INuGetSearchService nugetService,
+        INuGetXmlDocCache xmlDocCache)
     {
-        _explorer = explorer;
+        _explorer        = explorer;
         _packageExplorer = packageExplorer;
-        _tomlSerializer = tomlSerializer;
-        _nugetService = nugetService;
+        _tomlSerializer  = tomlSerializer;
+        _nugetService    = nugetService;
+        _xmlDocCache     = xmlDocCache;
     }
 
     [McpServerTool]
@@ -238,6 +247,77 @@ public class NuGetIntelliSenseTools
             throw new ArgumentException($"Failed to retrieve method overloads: {ex.Message}", ex);
         }
     }
+
+    [McpServerTool]
+    [Description(
+        "Returns full XML documentation for a specific member in a NuGet package. " +
+        "Covers any member kind: types (T:), methods (M:), properties (P:), fields (F:), events (E:), constructors. " +
+        "identifier accepts: bare name ('CompleteChat'), type name ('ChatClient'), or dotted path ('ChatClient.CompleteChat'). " +
+        "Returns: summary, params, typeparams, returns, remarks, example, exceptions. " +
+        "When identifier is ambiguous (same name on multiple types), all matches are returned — pass typeName to narrow. " +
+        "Only available for packages that ship XML docs (Microsoft SDKs, well-maintained OSS). " +
+        "The package must have been explored at least once (any prior NuGet tool call triggers caching). " +
+        "Call AFTER get_type_surface or get_type_shape to understand a member in depth.")]
+    public async Task<string> GetMemberXmlDoc(
+        [Description("NuGet package ID (e.g. 'OpenAI', 'Serilog')")]
+        string packageId,
+        [Description("Member identifier: bare name ('CompleteChat'), type ('ChatClient'), or dotted path ('ChatClient.CompleteChat')")]
+        string identifier,
+        [Description("Optional: type name hint to disambiguate when multiple types share a member name (e.g. 'ChatClient')")]
+        string? typeName = null,
+        [Description("Optional: specific version. Omit for latest stable.")]
+        string? version = null,
+        [Description("Optional: target framework (default net10.0)")]
+        string? targetFramework = null,
+        [Description("Optional: include prerelease (default false)")]
+        bool includePrerelease = false)
+    {
+        if (string.IsNullOrWhiteSpace(identifier))
+            throw new ArgumentException("identifier cannot be empty");
+
+        // Ensure the package is loaded — GetNamespaces is idempotent (Redis cache hit if already loaded).
+        // LoadAndCache() populates the xml doc cache as a side-effect before it deletes the temp files.
+        string resolvedVersion;
+        try
+        {
+            // Trigger load and capture the resolved version from the package metadata cache key.
+            // GetNamespaces internally calls LoadPackageMetadata which resolves the version.
+            await _packageExplorer.GetNamespaces(packageId, version, targetFramework, includePrerelease);
+
+            // The resolved version is stored in the xml doc cache by NuGetPackageLoader.
+            // Since we don't have a direct path to the resolved version string here,
+            // we try the caller-provided version first, then fall back to "latest" (the common case).
+            resolvedVersion = version ?? "latest";
+        }
+        catch (Exception ex)
+        {
+            throw new ArgumentException(
+                $"Failed to load package '{packageId}': {ex.Message}. " +
+                $"Ensure the package ID is correct and the server can reach nuget.org.", ex);
+        }
+
+        // Probe the xml doc cache. The loader stores under the *resolved* version string
+        // (e.g. "2.2.0"), not "latest". Try both the provided version and common aliases.
+        Dictionary<string, XmlDocEntry>? docMap = null;
+        var versionsToTry = new[] { resolvedVersion, version, "latest" }
+            .Where(v => v != null)
+            .Distinct()!
+            .Cast<string>()
+            .ToArray();
+
+        foreach (var v in versionsToTry)
+        {
+            if (_xmlDocCache.TryGet(packageId, v!, out docMap) && docMap != null)
+                break;
+        }
+
+        if (docMap == null || docMap.Count == 0)
+            return $"No XML documentation available for '{packageId}@{version ?? "latest"}'.\n" +
+                   $"The package either does not ship XML docs or the docs cache is not yet populated.\n" +
+                   $"Note: XML docs are cached during the first load — if you just installed this package, " +
+                   $"try calling get_package_namespaces first, then retry.";
+
+        var matches = NuGetXmlDocService.Resolve(docMap, identifier, typeName);
+        return NuGetXmlDocService.Format(matches, identifier);
+    }
 }
-
-

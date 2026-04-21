@@ -15,6 +15,7 @@ namespace NuGetExplorer.Services;
 public class NuGetPackageLoader : INuGetPackageLoader
 {
     private readonly IPackageMetadataCache _cache;
+    private readonly INuGetXmlDocCache _xmlDocCache;
     private readonly ILogger<NuGetPackageLoader> _logger;
     private readonly string _packageCacheDirectory;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _semaphores = new();
@@ -34,11 +35,13 @@ public class NuGetPackageLoader : INuGetPackageLoader
 
     public NuGetPackageLoader(
         IPackageMetadataCache cache,
+        INuGetXmlDocCache xmlDocCache,
         ILogger<NuGetPackageLoader> logger,
         string? packageCacheDirectory = null)
     {
-        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _cache       = cache       ?? throw new ArgumentNullException(nameof(cache));
+        _xmlDocCache = xmlDocCache ?? throw new ArgumentNullException(nameof(xmlDocCache));
+        _logger      = logger      ?? throw new ArgumentNullException(nameof(logger));
 
         _packageCacheDirectory = packageCacheDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -216,6 +219,28 @@ public class NuGetPackageLoader : INuGetPackageLoader
             {
                 _logger.LogWarning(ex, "Failed to extract metadata from assembly: {AssemblyPath}", assemblyPath);
             }
+        }
+
+        // Parse XML docs from the extracted package directory and cache them
+        // before CleanupPackage() deletes the files — zero extra network cost.
+        try
+        {
+            var docMap = _xmlDocCache.ParseFromPackagePath(packagePath);
+            if (docMap.Count > 0)
+            {
+                // Always store under the resolved version (e.g. "2.2.0")
+                _xmlDocCache.Set(packageId, resolvedVersion.ToString(), docMap);
+                // Also store under "latest" alias when caller did not pin a version,
+                // so the tool can find it with version=null → probes "latest".
+                if (string.IsNullOrEmpty(version))
+                    _xmlDocCache.Set(packageId, "latest", docMap);
+            }
+            else
+                _logger.LogDebug("No XML doc file found in package: {PackageId}@{Version}", packageId, resolvedVersion);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse/cache XML docs for {PackageId}@{Version}", packageId, resolvedVersion);
         }
 
         var cacheKey = BuildCacheKey(packageId, resolvedVersion.ToString(), targetFramework);
