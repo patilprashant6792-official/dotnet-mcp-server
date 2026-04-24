@@ -208,7 +208,16 @@ public class NuGetPackageLoader : INuGetPackageLoader
         {
             try
             {
-                var assemblyMetadata = ExtractMetadata(assemblyPath, allDependencyAssemblies);
+                // Pass ALL sibling assemblies from the same package as additional
+                // resolver paths. Without this, Anthropic.dll can't resolve types
+                // from Anthropic.Core.dll (same package, separate DLL), causing
+                // every property whose type lives in the sibling DLL to be silently
+                // skipped — resulting in 0 properties on all model types.
+                var siblingAssemblies = assemblies
+                    .Where(a => a != assemblyPath)
+                    .Concat(allDependencyAssemblies)
+                    .ToList();
+                var assemblyMetadata = ExtractMetadata(assemblyPath, siblingAssemblies);
 
                 foreach (var ns in assemblyMetadata.Keys)
                 {
@@ -241,7 +250,7 @@ public class NuGetPackageLoader : INuGetPackageLoader
                 // Always store under the resolved version (e.g. "2.2.0")
                 _xmlDocCache.Set(packageId, resolvedVersion.ToString(), docMap);
                 // Also store under "latest" alias when caller did not pin a version,
-                // so the tool can find it with version=null → probes "latest".
+                // so the tool can find it with version=null -> probes "latest".
                 if (string.IsNullOrEmpty(version))
                     _xmlDocCache.Set(packageId, "latest", docMap);
             }
@@ -419,7 +428,7 @@ public class NuGetPackageLoader : INuGetPackageLoader
 
             foreach (var type in assembly.GetTypes())
             {
-                if (!type.IsPublic || string.IsNullOrEmpty(type.Namespace))
+                if ((!type.IsPublic && !type.IsNestedPublic) || string.IsNullOrEmpty(type.Namespace))
                 {
                     continue;
                 }
@@ -434,7 +443,9 @@ public class NuGetPackageLoader : INuGetPackageLoader
                 var typeMetadata = new TypeMetadata
                 {
                     Namespace = ns,
-                    TypeName = type.Name,
+                    TypeName = type.IsNested
+                        ? $"{type.DeclaringType!.Name}.{type.Name}"
+                        : type.Name,
                     Kind = GetTypeKind(type)
                 };
 
@@ -456,17 +467,58 @@ public class NuGetPackageLoader : INuGetPackageLoader
                             }).ToList()
                         }).ToList();
 
-                    typeMetadata.Properties = type.GetProperties(
-                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
-                        .Select(p => new PropertySignature
+                    // Walk the full inheritance chain so properties declared on base classes
+                    // are included. Stainless-generated SDK types (e.g. Anthropic's InputSchema,
+                    // ToolUseBlock) extend a BaseModel parent — DeclaredOnly on the concrete
+                    // type alone silently drops every inherited property.
+                    // Deduplication by name: most-derived declaration wins (bottom-up traversal),
+                    // matching standard C# override/hide semantics.
+                    // Each level is wrapped independently: an unresolvable base type (e.g.
+                    // Anthropic.Core.ModelBase from a separate assembly) should not prevent
+                    // the concrete type's own properties from being captured.
+                    var seenProps = new HashSet<string>(StringComparer.Ordinal);
+                    var allProperties = new List<PropertySignature>();
+                    for (var t = type; t != null; t = SafeGetBaseType(t))
+                    {
+                        try
                         {
-                            Name = p.Name,
-                            PropertyType = p.PropertyType.FullName ?? p.PropertyType.Name,
-                            Visibility = GetVisibility(p.GetMethod ?? p.SetMethod),
-                            CanRead = p.CanRead,
-                            CanWrite = p.CanWrite,
-                            IsStatic = (p.GetMethod?.IsStatic ?? p.SetMethod?.IsStatic) ?? false
-                        }).ToList();
+                            foreach (var p in t.GetProperties(
+                                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+                            {
+                                try
+                                {
+                                    if (!seenProps.Add(p.Name)) continue;
+                                    // MetadataLoadContext cannot resolve modreq(IsExternalInit) on
+                                    // C# 9 init-only setters, so p.CanRead is unreliable for records.
+                                    // Treat any property with an accessible accessor as readable.
+                                    var getter = p.GetMethod;
+                                    var setter = p.SetMethod;
+                                    if (getter == null && setter == null) continue;
+                                    allProperties.Add(new PropertySignature
+                                    {
+                                        Name         = p.Name,
+                                        PropertyType = SafeGetTypeName(p.PropertyType),
+                                        Visibility   = GetVisibility(getter ?? setter),
+                                        CanRead      = getter != null || setter != null,
+                                        CanWrite     = p.CanWrite || setter != null,
+                                        IsStatic     = (getter?.IsStatic ?? setter?.IsStatic) ?? false
+                                    });
+                                }
+                                catch (Exception propEx)
+                                {
+                                    _logger.LogDebug(propEx, "Skipping property {Type}.{Prop} — accessor unresolvable",
+                                        t.Name, p.Name);
+                                }
+                            }
+                        }
+                        catch (Exception levelEx)
+                        {
+                            _logger.LogDebug(levelEx, "Skipping base type {Base} property scan for {Type}",
+                                t.Name, type.Name);
+                            break;
+                        }
+                    }
+                    typeMetadata.Properties = allProperties;
 
                     typeMetadata.Fields = type.GetFields(
                         BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
@@ -707,6 +759,25 @@ public class NuGetPackageLoader : INuGetPackageLoader
         _logger.LogDebug("No matching framework found, using all DLLs from lib folder");
         var allDlls = Directory.GetFiles(libPath, "*.dll", SearchOption.AllDirectories).ToList();
         return allDlls;
+    }
+
+
+    /// Returns the base type safely — returns null if the base type cannot be
+    /// resolved by MetadataLoadContext (e.g. cross-assembly reference missing
+    /// from the resolver paths), preventing a TypeLoadException from aborting
+    /// the entire property-walk loop.
+    private static Type? SafeGetBaseType(Type t)
+    {
+        try { return t.BaseType; }
+        catch { return null; }
+    }
+
+    /// Returns the FullName of a type safely — falls back to Name when FullName
+    /// throws (unresolved generic args or missing assembly references).
+    private static string SafeGetTypeName(Type t)
+    {
+        try { return t.FullName ?? t.Name; }
+        catch { return t.Name; }
     }
 
     private TypeKind GetTypeKind(Type type)
