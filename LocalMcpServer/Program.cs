@@ -163,10 +163,9 @@ app.UseHttpsRedirection();
 
 app.UseAuthorization();
 
-// ✨✨✨ CRITICAL: ADD THESE TWO LINES ✨✨✨
-app.UseStaticFiles();
+// Static files: DefaultFiles must precede StaticFiles to rewrite / → index.html
 app.UseDefaultFiles();
-// ✨✨✨ END CRITICAL SECTION ✨✨✨
+app.UseStaticFiles();
 
 app.MapControllers();
 app.MapHealthChecks("/health");

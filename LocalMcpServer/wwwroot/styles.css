@@ -575,3 +575,140 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── Nav anchor fix ─────────────────────────────────── */
+a.nav-item { text-decoration: none; }
+
+/* ── NuGet Cache Scroll Area ────────────────────────── */
+.nuget-scroll-area {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding-right: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* ── NuGet Table ────────────────────────────────────── */
+.nuget-table {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.nuget-table-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 120px 120px 110px 44px;
+    gap: 8px;
+    padding: 11px 18px;
+    background: var(--bg-elevated);
+    border-bottom: 2px solid var(--border);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.nuget-row {
+    display: grid;
+    grid-template-columns: 1fr 120px 120px 110px 44px;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 18px;
+    border-bottom: 1px solid var(--border-subtle);
+    transition: background 0.15s;
+    position: relative;
+}
+
+.nuget-row::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0;
+    width: 3px; height: 100%;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.nuget-row:last-child { border-bottom: none; }
+.nuget-row:hover { background: var(--bg-hover); }
+.nuget-row:hover::before { opacity: 1; }
+
+/* ── Package name — styled as a code token ──────────── */
+.nuget-pkg {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 3px 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+    max-width: 100%;
+}
+
+/* ── Version / Framework badges ─────────────────────── */
+.nuget-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border: 1px solid;
+}
+
+.version-badge {
+    background: rgba(88,166,255,0.1);
+    color: var(--accent);
+    border-color: rgba(88,166,255,0.35);
+}
+
+.framework-badge {
+    background: rgba(210,153,34,0.1);
+    color: var(--orange);
+    border-color: rgba(210,153,34,0.35);
+}
+
+/* ── TTL Badge ──────────────────────────────────────── */
+.ttl-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    border: 1px solid;
+}
+
+.ttl-green  { background: rgba(63,185,80,0.1);   color: var(--green);  border-color: rgba(63,185,80,0.35); }
+.ttl-orange { background: rgba(210,153,34,0.1);  color: var(--orange); border-color: rgba(210,153,34,0.35); }
+.ttl-red    { background: rgba(248,81,73,0.1);   color: var(--red);    border-color: rgba(248,81,73,0.35); }
+.ttl-none   { background: var(--bg-elevated);    color: var(--text-muted); border-color: var(--border); }
+
+/* ── Per-row delete button ──────────────────────────── */
+.btn-row-delete {
+    padding: 4px 9px;
+    font-size: 12px;
+    justify-self: center;
+    border-radius: var(--radius-sm);
+}
+

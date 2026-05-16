@@ -1,0 +1,85 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>.NET MCP Server - NuGet Cache</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-layout">
+
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-icon">&#9889;</div>
+                <div class="brand-text">
+                    <span class="brand-name">dotnet-mcp</span>
+                    <span class="brand-sub">server</span>
+                </div>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="config.html" class="nav-item">
+                    <span class="nav-icon">&#128194;</span>
+                    <span>Projects</span>
+                </a>
+                <a href="nuget-cache.html" class="nav-item active">
+                    <span class="nav-icon">&#128230;</span>
+                    <span>NuGet Cache</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="sidebar-status">
+                    <span class="status-dot"></span>
+                    <span>Server Online</span>
+                </div>
+                <a class="sidebar-credit" href="https://github.com/patilprashant6792-official" target="_blank" rel="noopener">
+                    <span class="credit-label">Created by patilprashant6792-official</span>
+                </a>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <div class="page-header">
+                <div class="page-title-group">
+                    <h1 class="page-title">NuGet Cache</h1>
+                    <p class="page-subtitle">Cached package metadata stored in Redis &mdash; clear to force a fresh fetch</p>
+                </div>
+                <button id="clear-all-btn" class="btn btn-danger hidden">&#128465; Clear All Cache</button>
+            </div>
+
+            <div id="error-banner" class="banner banner-error hidden"></div>
+            <div id="success-banner" class="banner banner-success hidden"></div>
+
+            <div class="stats-bar">
+                <div class="stat">
+                    <span class="stat-value" id="pkg-count">0</span>
+                    <span class="stat-label">packages cached</span>
+                </div>
+            </div>
+
+            <div class="nuget-scroll-area">
+                <div class="nuget-table" id="nuget-table-wrap">
+                    <div class="nuget-table-header">
+                        <span>Package</span>
+                        <span>Version</span>
+                        <span>Framework</span>
+                        <span>Expires In</span>
+                        <span></span>
+                    </div>
+                    <div id="pkg-list"></div>
+                </div>
+
+                <div id="empty-state" class="empty-state hidden">
+                    <div class="empty-icon">&#128230;</div>
+                    <p class="empty-title">No packages cached yet</p>
+                    <p class="empty-hint">Package metadata is cached automatically when MCP tools first resolve a NuGet package</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="nuget-cache.js"></script>
+</body>
+</html>
