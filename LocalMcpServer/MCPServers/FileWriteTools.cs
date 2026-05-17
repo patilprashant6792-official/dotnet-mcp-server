@@ -25,7 +25,7 @@ public class FileWriteTools
         "WHEN TO USE: new files or full rewrites. For targeted edits use edit_lines.\n" +
         "RETURNS: per-file success/error, final line count, size in bytes, and last-modified timestamp.")]
     public async Task<string> WriteFile(
-        [Description("Project name (e.g. 'RisingTideAPI')")]
+        [Description("Project name (e.g. 'LocalMcpServer')")]
         string projectName,
         [Description(
             "JSON array of files to write. Each entry:\n" +

@@ -22,7 +22,7 @@ public class ProjectSkeletonTools
         "INCREMENTAL: Use sinceTimestamp for files modified after specific date. " +
         "Use this BEFORE any project modifications to understand existing structure.")]
     public async Task<string> GetProjectSkeleton(
-        [Description("Required: Project name (e.g., 'RisingTideAPI', 'LocalMcpServer'). Use '*' to list all projects.")]
+        [Description("Required: Project name (e.g., 'LocalMcpServer'). Use '*' to list all projects.")]
         string projectName,
         [Description("Optional: Unix timestamp or ISO 8601 date (e.g., '2026-01-17T00:00:00Z'). Returns only files modified after this date.")]
         string? sinceTimestamp = null)
